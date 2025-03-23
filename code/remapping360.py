@@ -2,7 +2,8 @@
 # import numpy as np
 import math
 import torch
-
+import matplotlib.pyplot as plt
+import cv2 as cv
 
 # Not used
 def remapping360(output_width, output_height, image_width, image_height, yaw, pitch, roll, focal_length):
@@ -58,20 +59,11 @@ def remapping360(output_width, output_height, image_width, image_height, yaw, pi
 # Used
 
 
-def remapping360_torch(output_width, output_height, image_width, image_height, yaw, pitch, roll, focal_length, device):
+def getFrameOutputVectors(output_width, output_height, device):
+  y_angles = torch.linspace(-0.5, 0.5, output_height, device=device) * -torch.pi
+  x_angles = torch.linspace(-1, 1, output_width, device=device) * torch.pi
 
-  half_image_width, half_image_height = image_width / 2, image_height / 2
-
-  camera_rotation_matrix = XYZRotationMatrix(yaw, pitch, roll).to(device)
-  inv_camera_rotation_matrix = torch.linalg.inv(camera_rotation_matrix)
-
-  y_angles = torch.linspace(-0.5, 0.5,
-                            output_height, device=device) * -math.pi
-  x_angles = torch.linspace(-1, 1,
-                            output_width, device=device) * math.pi
-
-  y_angles_grid, x_angles_grid = torch.meshgrid(
-    y_angles, x_angles, indexing='ij')
+  y_angles_grid, x_angles_grid = torch.meshgrid(y_angles, x_angles, indexing='ij')
 
   # TODO: Increase speed by meshgriding the cosine and sines??
   # TODO: Increase speed by precalculating this part, and reusing it for subsequent frames
@@ -81,19 +73,26 @@ def remapping360_torch(output_width, output_height, image_width, image_height, y
   Sa = torch.sin(x_angles_grid)
   Sb = torch.sin(y_angles_grid)
 
-  output_vectors = torch.stack([Cb * Sa, -Sb, Ca * Cb], dim=-1)
+  output_vectors = torch.stack([Cb * Sa, Sb, Ca * Cb], dim=-1)
+  output_vectors = output_vectors.reshape(-1, 3)
+  return output_vectors
+
+
+def remapping360_torch(output_width, output_height, image_width, image_height, yaw, pitch, roll, focal_length, output_vectors, device):
+
+  half_image_width, half_image_height = image_width / 2, image_height / 2
+  camera_rotation_matrix = (Ry(-yaw) @ Rx(-pitch) @ Rz(roll)).to(device)
+  inv_camera_rotation_matrix = torch.linalg.inv(camera_rotation_matrix)
 
   # Flatten for batch processing
-  output_vectors = output_vectors.reshape(-1, 3)
 
   v_transformed = torch.mm(inv_camera_rotation_matrix, output_vectors.T).T
-
   valid_mask = v_transformed[:, 2] > 0  # Only keep forward-facing pixels
-
   v_transformed *= focal_length / v_transformed[:, 2:3]
 
   # Undo the flattening (see note below)
   v_transformed = v_transformed.reshape(output_height, output_width, 3)
+  v_transformed[:, :, 1] = -v_transformed[:, :, 1]  # Flip Y axis
   valid_mask = valid_mask.reshape(output_height, output_width)
 
   mapX = torch.full((output_height, output_width), -100000,
@@ -113,60 +112,26 @@ def remapping360_torch(output_width, output_height, image_width, image_height, y
   return mapX.cpu().numpy(), mapY.cpu().numpy()
 
 # ZYX = YAW, PITCH, ROLL
+# Yaw around Z, Pitch around Y, Roll around X
 
 
-def ZYXRotationMatrix(yaw, pitch, roll):
-  # a = yaw = Z axis
-  # b = pitch = Y axis
-  # c = roll = X axis
-  Ca = math.cos(yaw)
-  Cb = math.cos(pitch)
-  Cy = math.cos(roll)
-  Sa = math.sin(yaw)
-  Sb = math.sin(pitch)
-  Sy = math.sin(roll)
-  R = torch.tensor([[Ca * Cb, Ca * Sb * Sy - Cy * Sa, Sa * Sy + Ca * Cy * Sb],
-                    [Cb * Sa, Ca * Cy + Sa * Sb * Sy, Cy * Sa * Sb - Ca * Sy],
-                    [-Sb, Cb * Sy, Cb * Cy]])
-  return R
+def Rz(alpha):
+  return torch.tensor([[math.cos(alpha), -math.sin(alpha), 0],
+                      [math.sin(alpha), math.cos(alpha), 0],
+                      [0, 0, 1]])
 
 
-def XYZRotationMatrix(yaw, pitch, roll):
-  Ca = math.cos(roll)
-  Cb = math.cos(pitch)
-  Cy = math.cos(yaw)
-  Sa = math.sin(roll)
-  Sb = math.sin(pitch)
-  Sy = math.sin(yaw)
-  R = torch.tensor([[Cb * Cy, -Cb * Sy, Sb],
-                    [Ca * Sy + Cy * Sa * Sb, Ca * Cy - Sa * Sb * Sy, -Cb * Sa],
-                    [Sa * Sy - Ca * Cy * Sb, Cy * Sa + Ca * Sb * Sy, Ca * Cb]])
-  return R
+def Ry(beta):
+  return torch.tensor([[math.cos(beta), 0, math.sin(beta)],
+                      [0, 1, 0],
+                      [-math.sin(beta), 0, math.cos(beta)]])
 
 
-def YXZRotationMatrix(yaw, pitch, roll):
-  Ca = math.cos(yaw)
-  Cb = math.cos(pitch)
-  Cy = math.cos(roll)
-  Sa = math.sin(yaw)
-  Sb = math.sin(pitch)
-  Sy = math.sin(roll)
-  rotation_matrix = torch.tensor([[Ca * Cy + Sa * Sb * Sy, Cy * Sa * Sb - Ca * Sy, Cb * Sa],
-                                  [Cb * Sy, Cb * Cy, -Sb],
-                                  [Ca * Sb * Sy - Cy * Sa, Ca * Cy * Sb + Sa * Sy, Ca * Cb]])
-  return rotation_matrix
+def Rx(gamma):
+  return torch.tensor([[1, 0, 0],
+                      [0, math.cos(gamma), -math.sin(gamma)],
+                      [0, math.sin(gamma), math.cos(gamma)]])
 
-
-def XYZFromYXZ(yaw, pitch, roll):
-  # We have yaw-pitch-roll angle (YXZ) but we need to convert it to pitch-yaw-roll (XYZ)
-  Ca = math.cos(yaw)
-  Cb = math.cos(pitch)
-  Cy = math.cos(roll)
-  Sa = math.sin(yaw)
-  Sb = math.sin(pitch)
-  Sy = math.sin(roll)
-
-  pitch = math.atan2(Sb, Ca * Cb)
-  yaw = math.asin(Cb * Sa)
-  roll = math.atan2(-(Cy * Sa * Sb - Ca * Sy), Ca * Cy + Sa * Sb * Sy)
-  return pitch, yaw, roll
+# map: width x height x 2, where map[x,y, 0] says which x coordinate from the original image should be used for pixel (x,y)
+# def fisheyeUndistort(map, )
+  # fisheye undistort takes the x,y locations given by the map, and replaces them with what should be there, if the image were undistorted

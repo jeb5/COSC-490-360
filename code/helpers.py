@@ -1,20 +1,32 @@
 import numpy as np
 import cv2 as cv
+import spatialmedia
+import spatialmedia.metadata_utils
 
+# 100
 GOPRO_CAMERA = (
-    np.array([[1050.14, 0.0, 947.65],
-              [0.0, 1057.60, 532.78],
-              [0.0, 0.0, 1.0]]),
-    np.array([0.0459, 0.0144, 0.00425, -0.01387])
+	np.array([[1050.14, 0.0, 947.65],
+           [0.0, 1057.60, 532.78],
+            [0.0, 0.0, 1.0]]),
+	np.array([0.0459, 0.0144, 0.00425, -0.01387])
 )
 
 # 100mm = 1920 pixels
 # focal length = 35mm, so focal length = 35/100 * 1920 = 672
 BLENDER_CAMERA = (
-    np.array([[672.0, 0.0, 1920.0 / 2],
-              [0.0, 672.0, 1080.0 / 2],
-              [0.0, 0.0, 1.0]]),
-    np.array([0.0, 0.0, 0.0, 0.0])
+	np.array([[672.0, 0.0, 1920.0 / 2],
+           [0.0, 672.0, 1080.0 / 2],
+            [0.0, 0.0, 1.0]]),
+	np.array([0.0, 0.0, 0.0, 0.0])
+)
+
+# 100mm = 1920 pixels
+# focal length = 1050 pixels, so focal length = 1050/1920 * 100 = 54.68mm
+BLENDER_CAMERA_2 = (
+	np.array([[1050, 0.0, 1920.0 / 2],
+           [0.0, 1050, 1080.0 / 2],
+           [0.0, 0.0, 1.0]]),
+	np.array([0.0, 0.0, 0.0, 0.0])
 )
 
 
@@ -39,3 +51,10 @@ def add_transparent_image(background, foreground):
   outImage = outImage * 255.0
 
   return outImage
+
+
+def addSphericalMetadata(input_path, output_path):
+	metadata = spatialmedia.metadata_utils.Metadata()
+	metadata.video = spatialmedia.metadata_utils.generate_spherical_xml()
+	def logging(message): print(message)
+	spatialmedia.metadata_utils.inject_metadata(input_path, output_path, metadata, logging)
