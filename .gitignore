@@ -2,4 +2,4 @@ output/*
 input/*.mkv
 input/*.mp4
 .DS_Store
-# **/__pycache__/
+**/__pycache__/
