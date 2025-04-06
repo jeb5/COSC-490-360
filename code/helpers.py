@@ -3,6 +3,7 @@ import cv2 as cv
 import spatialmedia
 import spatialmedia.metadata_utils
 import torch
+import torchvision
 
 # 100
 GOPRO_CAMERA = (
@@ -27,7 +28,13 @@ BLENDER_CAMERA_2 = (
 	np.array([[1050, 0.0, 1920.0 / 2],
            [0.0, 1050, 1080.0 / 2],
            [0.0, 0.0, 1.0]]),
-	np.array([0.0, 0.0, 0.0, 0.0])
+  GOPRO_CAMERA[1]
+)
+BLENDER_CAMERA_3 = (
+    np.array([[1050, 0.0, (1920.0 * 1.5) / 2],
+              [0.0, 1050, (1080.0 * 1.5) / 2],
+              [0.0, 0.0, 1.0]]),
+    GOPRO_CAMERA[1]
 )
 
 
@@ -53,6 +60,14 @@ def add_transparent_image(background, foreground):
   outImage = outImage * 255.0
 
   return outImage.astype(np.uint8)
+
+
+def centerCrop(image, target_width, target_height):
+  top, left = (image.shape[0] - target_height) // 2, (image.shape[1] - target_width) // 2
+  cropped = image.permute(2, 0, 1)
+  cropped = torchvision.transforms.functional.crop(cropped, top, left, target_height, target_width)
+  cropped = cropped.permute(1, 2, 0)
+  return cropped
 
 
 def BGRAToBGRAlphaBlack(image):

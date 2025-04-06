@@ -25,7 +25,8 @@ def torch_remap(map, image):
   image_matte = image[:, 0:3, :, :]
   map = map.clone().unsqueeze(0)
 
-  matte_result = torch.nn.functional.grid_sample(image_matte, map, mode='bilinear', padding_mode='border', align_corners=True)
+  matte_result = torch.nn.functional.grid_sample(image_matte.to('cpu'), map.to(
+    'cpu'), mode='bilinear', padding_mode='border', align_corners=True).to(image.device)
   alpha_result = torch.nn.functional.grid_sample(image_alpha, map, mode='bilinear', padding_mode='zeros', align_corners=True)
 
   result = torch.cat((matte_result, alpha_result), dim=1)
