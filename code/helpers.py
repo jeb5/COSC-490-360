@@ -2,6 +2,7 @@ import numpy as np
 import cv2 as cv
 import spatialmedia
 import spatialmedia.metadata_utils
+import torch
 
 # 100
 GOPRO_CAMERA = (
@@ -31,6 +32,7 @@ BLENDER_CAMERA_2 = (
 
 
 def add_transparent_image(background, foreground):
+
   fg = foreground.astype(float)
   bg = background.astype(float)
 
@@ -50,11 +52,44 @@ def add_transparent_image(background, foreground):
   outImage = cv.merge((outImage, output_alpha))
   outImage = outImage * 255.0
 
-  return outImage
+  return outImage.astype(np.uint8)
 
+
+def BGRAToBGRAlphaBlack(image):
+  if image.shape[2] != 4:
+    raise ValueError("Image must have 4 channels")
+  if image.dtype != np.uint8:
+    raise ValueError("Image must be of type uint8")
+
+  bgr = image[:, :, :3]
+  alpha = image[:, :, 3]
+  alpha = alpha.astype(float) / 255.0
+  alpha = cv.merge((alpha, alpha, alpha))
+  bgr = cv.multiply(bgr.astype(float), alpha)
+  return bgr.astype(np.uint8)
 
 def addSphericalMetadata(input_path, output_path):
 	metadata = spatialmedia.metadata_utils.Metadata()
 	metadata.video = spatialmedia.metadata_utils.generate_spherical_xml()
 	def logging(message): print(message)
 	spatialmedia.metadata_utils.inject_metadata(input_path, output_path, metadata, logging)
+
+
+# def blenderCyclesPolynomialFisheyeUndistort(size, K):
+#   k = [0, -0.439, -0.001, 0, 0]
+#   sensor = 100.0  # mm
+#   w, h = size
+#   hw, hh = w / 2, h / 2
+#   output = torch.zeros((h, w, 2), dtype=torch.float32)
+#   for x_raw in range(w):
+#     for y_raw in range(h):
+#       x = ((x_raw - hw) / hw) * sensor
+#       y = ((y_raw - hh) / hw) * sensor
+#       r = np.sqrt(x ** 2 + y ** 2)
+#       theta = k[0] + k[1] * r + k[2] * r ** 2 + k[3] * r ** 3 + k[4] * r ** 4
+#       phi = np.acos(x / r)
+#       out_x = np.cos(theta)
+#       out_y = np.sin(theta) - np.cos(phi)
+#       output[y_raw, x_raw, 0] = out_x * hw + hw
+#       output[y_raw, x_raw, 1] = out_y * hw + hh
+#   return output

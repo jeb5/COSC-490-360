@@ -89,6 +89,8 @@ def remapping360_torch(output_width, output_height, image_width, image_height, y
   v_transformed = torch.mm(inv_camera_rotation_matrix, output_vectors.T).T
   valid_mask = v_transformed[:, 2] > 0  # Only keep forward-facing pixels
   v_transformed *= focal_length / v_transformed[:, 2:3]
+  # v_transformed[:, 0] += 12
+  # v_transformed[:, 0] -= 2
 
   # Undo the flattening (see note below)
   v_transformed = v_transformed.reshape(output_height, output_width, 3)
