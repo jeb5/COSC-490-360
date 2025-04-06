@@ -1,7 +1,5 @@
 import numpy as np
 import cv2 as cv
-import spatialmedia
-import spatialmedia.metadata_utils
 import torch
 import torchvision
 
@@ -61,6 +59,32 @@ def add_transparent_image(background, foreground):
 
   return outImage.astype(np.uint8)
 
+# Images are BGRA [h, w, 4]
+
+
+def add_transparent_image_torch(background, foreground):
+  fg_alpha = foreground[:, :, 3] / 255.0
+  bg_alpha = background[:, :, 3] / 255.0
+
+  fg_color = foreground[:, :, :3] / 255.0
+  bg_color = background[:, :, :3] / 255.0
+
+  output_alpha = fg_alpha + bg_alpha * (1 - fg_alpha)
+  fg_alpha_3 = torch.stack((fg_alpha, fg_alpha, fg_alpha), dim=-1)
+  fg_color = fg_color * fg_alpha_3
+  bg_color = bg_color * (1 - fg_alpha_3)
+
+  outImage = fg_color + bg_color
+  outImage = torch.cat((outImage, output_alpha.unsqueeze(-1)), dim=-1)
+  outImage = outImage * 255.0
+  return outImage
+
+
+def display_torch_image(image, window_name="Image"):
+  image_cv = BGRAToBGRAlphaBlack_torch(image).cpu().numpy().astype(np.uint8)
+  cv.imshow(window_name, image_cv)
+  cv.waitKey(0)
+  cv.destroyAllWindows()
 
 def centerCrop(image, target_width, target_height):
   top, left = (image.shape[0] - target_height) // 2, (image.shape[1] - target_width) // 2
@@ -83,11 +107,21 @@ def BGRAToBGRAlphaBlack(image):
   bgr = cv.multiply(bgr.astype(float), alpha)
   return bgr.astype(np.uint8)
 
-def addSphericalMetadata(input_path, output_path):
-	metadata = spatialmedia.metadata_utils.Metadata()
-	metadata.video = spatialmedia.metadata_utils.generate_spherical_xml()
-	def logging(message): print(message)
-	spatialmedia.metadata_utils.inject_metadata(input_path, output_path, metadata, logging)
+# Image is BGRA [h, w, 4]
+
+
+def BGRAToBGRAlphaBlack_torch(image):
+  if image.shape[2] != 4:
+    raise ValueError("Image must have 4 channels")
+  if image.dtype != torch.float32:
+    raise ValueError("Image must be of type float32")
+
+  bgr = image[:, :, :3]
+  alpha = image[:, :, 3]
+  alpha = alpha / 255.0
+  alpha = torch.stack((alpha, alpha, alpha), dim=-1)
+  bgr = bgr * alpha
+  return bgr
 
 
 # def blenderCyclesPolynomialFisheyeUndistort(size, K):

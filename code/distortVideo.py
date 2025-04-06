@@ -3,12 +3,12 @@ import remap
 import helpers
 import torch
 import numpy as np
-import video
+import code.VideoWriter as VideoWriter
 
 
 def main():
   video_path = "./input/bscr9.mkv"
-  output_path = "./output/remapped_bsrc9.mp4"
+  output_path = "./output/remapped_bscr9.mp4"
   input_video = cv.VideoCapture(video_path)
   if not input_video.isOpened():
     print("Error: Could not open video.")
@@ -21,7 +21,7 @@ def main():
   # horizontal_fov_times_1p5 = 2 * math.atan(width * 1.5 / (2 * horizontal_focal_length)) * 180 / torch.pi
   # print(f"Horizontal FOV x 1.5: {horizontal_fov_times_1p5:.4f} degrees")
 
-  output_video = video.VideoWriter(output_path, 20, (output_width, output_height), mbps=10)
+  output_video = VideoWriter.VideoWriter(output_path, 20, (output_width, output_height), mbps=10)
 
   device = torch.accelerator.current_accelerator().type if torch.accelerator.is_available() else 'cpu'
   if device == 'cpu':

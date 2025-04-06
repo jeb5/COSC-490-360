@@ -8,11 +8,12 @@ import cv2 as cv
 
 
 # First apply map1 to an image, then apply map2 to the result
+# TODO: Combined remappins might be a fool's errand (How to deal with out-of-bounds pixels?)
 def combineRemappings(map1, map2):
-  map1 = map1.clone().permute(2, 0, 1).unsqueeze(0) + 5
+  map1 = map1.clone().permute(2, 0, 1).unsqueeze(0)
   map2 = map2.clone().unsqueeze(0)
   result = torch.nn.functional.grid_sample(map1, map2, mode='bilinear', padding_mode='zeros', align_corners=True)
-  result = result.squeeze(0).permute(1, 2, 0) - 5
+  result = result.squeeze(0).permute(1, 2, 0)
   return result
 
 # map is [h, w, 2]
@@ -34,11 +35,11 @@ def torch_remap(map, image):
   return result.squeeze(0).permute(1, 2, 0)
 
 
-def absoluteToRelative(map):
-  relative_map = map.clone()
-  (hw, hh) = map.shape[1] / 2.0, map.shape[0] / 2.0
-  relative_map[..., 0] = (map[..., 0] - hw) / hw
-  relative_map[..., 1] = (map[..., 1] - hh) / hh
+def absoluteToRelative(map, source_size):
+  relative_map = torch.empty_like(map)
+  (hw, hh) = source_size[0] / 2.0, source_size[1] / 2.0
+  relative_map[..., 0] = map[..., 0] * (1 / hw) - 1
+  relative_map[..., 1] = map[..., 1] * (1 / hh) - 1
   return relative_map
 
 
