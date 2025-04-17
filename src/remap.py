@@ -2,6 +2,7 @@
 import torch
 import numpy as np
 import cv2 as cv
+import line_profiler
 
 # Maps are:
 # [h, w, 2], where the last dimension is (x, y) (between -1 and 1)
@@ -20,14 +21,14 @@ def combineRemappings(map1, map2):
 # image is [h, w, channels]
 
 
+@line_profiler.profile
 def torch_remap(map, image):
   image = image.clone().permute(2, 0, 1).unsqueeze(0)
   image_alpha = image[:, 3:4, :, :]
   image_matte = image[:, 0:3, :, :]
   map = map.clone().unsqueeze(0)
 
-  matte_result = torch.nn.functional.grid_sample(image_matte.to('cpu'), map.to(
-    'cpu'), mode='bilinear', padding_mode='border', align_corners=True).to(image.device)
+  matte_result = torch.nn.functional.grid_sample(image_matte, map, mode='bilinear', padding_mode='reflection', align_corners=True) # padding mode border unavailable on MPS
   alpha_result = torch.nn.functional.grid_sample(image_alpha, map, mode='bilinear', padding_mode='zeros', align_corners=True)
 
   result = torch.cat((matte_result, alpha_result), dim=1)
@@ -35,6 +36,7 @@ def torch_remap(map, image):
   return result.squeeze(0).permute(1, 2, 0)
 
 
+@line_profiler.profile
 def absoluteToRelative(map, source_size):
   relative_map = torch.empty_like(map)
   (hw, hh) = source_size[0] / 2.0, source_size[1] / 2.0
@@ -53,4 +55,4 @@ def getFisheyeDistortionMap(outputSize, K, D):
   indices = indices.numpy().astype(np.float32)[:, np.newaxis, :]
   distorted = cv.fisheye.undistortPoints(indices, K, D, None, K).reshape(w, h, 2)
   distorted = torch.from_numpy(distorted).transpose(0, 1)
-  return absoluteToRelative(distorted)
+  return absoluteToRelative(distorted, outputSize)

@@ -3,3 +3,5 @@ input/*.mkv
 input/*.mp4
 .DS_Store
 **/__pycache__/
+*.egg-info
+/temp/

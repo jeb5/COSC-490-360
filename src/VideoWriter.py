@@ -8,6 +8,7 @@ import sys
 import helpers
 import spatialmedia
 import spatialmedia.metadata_utils
+import line_profiler
 
 
 class VideoWriter:
@@ -18,7 +19,7 @@ class VideoWriter:
     self.mbps = mbps
     self.spherical_metadata = spherical_metadata
     self.temp_dir = tempfile.mkdtemp(suffix="video_frames")
-    print(f"Temporary directory for video frames: {self.temp_dir}")
+    # print(f"Temporary directory for video frames: {self.temp_dir}")
     self.frame_number = 0
     self.closed = False
 
@@ -40,6 +41,7 @@ class VideoWriter:
       self.closed = True
 
   # Frame is a tensor of shape (H, W, C), BGRA
+  @line_profiler.profile
   def write_frame(self, frame):
     if self.closed:
       raise ValueError("VideoWriter has already been closed.")

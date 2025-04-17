@@ -6,10 +6,10 @@ name = "pypi"
 [packages]
 opencv-python = "*"
 torch = "*"
-matplotlib = "*"
-pyexiftool = "*"
 spatialmedia = {git = "https://github.com/google/spatial-media.git"}
 torchvision = "*"
+pillow = "*"
+line-profiler = "*"
 
 [dev-packages]
 

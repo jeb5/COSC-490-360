@@ -12,29 +12,18 @@ GOPRO_CAMERA = (
 )
 
 # 100mm = 1920 pixels
-# focal length = 35mm, so focal length = 35/100 * 1920 = 672
-BLENDER_CAMERA = (
-	np.array([[672.0, 0.0, 1920.0 / 2],
-           [0.0, 672.0, 1080.0 / 2],
-            [0.0, 0.0, 1.0]]),
-	np.array([0.0, 0.0, 0.0, 0.0])
-)
-
-# 100mm = 1920 pixels
 # focal length = 1050 pixels, so focal length = 1050/1920 * 100 = 54.68mm
-BLENDER_CAMERA_2 = (
+BLENDER_CAMERA = (
 	np.array([[1050, 0.0, 1920.0 / 2],
            [0.0, 1050, 1080.0 / 2],
            [0.0, 0.0, 1.0]]),
-  GOPRO_CAMERA[1]
-)
-BLENDER_CAMERA_3 = (
-    np.array([[1050, 0.0, (1920.0 * 1.5) / 2],
-              [0.0, 1050, (1080.0 * 1.5) / 2],
-              [0.0, 0.0, 1.0]]),
-    GOPRO_CAMERA[1]
+	np.array([0.0, 0.0, 0.0, 0.0])
 )
 
+BLENDER_CAMERA_WITH_FISHEYE = (
+	BLENDER_CAMERA[0],
+  GOPRO_CAMERA[1]
+)
 
 def add_transparent_image(background, foreground):
 
@@ -122,6 +111,12 @@ def BGRAToBGRAlphaBlack_torch(image):
   alpha = torch.stack((alpha, alpha, alpha), dim=-1)
   bgr = bgr * alpha
   return bgr
+
+def get_device():
+  device = torch.accelerator.current_accelerator().type if torch.accelerator.is_available() else 'cpu'
+  if device == 'cpu':
+    print("Warning: Using CPU for remapping, which may be slow")
+  return device
 
 
 # def blenderCyclesPolynomialFisheyeUndistort(size, K):

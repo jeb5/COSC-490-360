@@ -4,6 +4,7 @@ import math
 import torch
 import matplotlib.pyplot as plt
 import cv2 as cv
+import line_profiler
 
 # Not used
 def remapping360(output_width, output_height, image_width, image_height, yaw, pitch, roll, focal_length):
@@ -56,8 +57,6 @@ def remapping360(output_width, output_height, image_width, image_height, yaw, pi
 
   return mapX, mapY
 
-# Used
-
 
 def getFrameOutputVectors(output_width, output_height, device):
   y_angles = torch.linspace(-0.5, 0.5, output_height, device=device) * -torch.pi
@@ -78,6 +77,7 @@ def getFrameOutputVectors(output_width, output_height, device):
   return output_vectors
 
 
+@line_profiler.profile
 def remapping360_torch(output_width, output_height, image_width, image_height, yaw, pitch, roll, focal_length, output_vectors, device):
 
   half_image_width, half_image_height = image_width / 2, image_height / 2
@@ -102,6 +102,9 @@ def remapping360_torch(output_width, output_height, image_width, image_height, y
   mapY = torch.full((output_height, output_width), -100000,
                     dtype=torch.float32, device=device)
 
+  # count valid pixels
+  valid_pixels = torch.sum(valid_mask)
+  print(f"Valid pixels: {valid_pixels}")
   mapX[valid_mask] = v_transformed[valid_mask][:, 0] + half_image_width
   mapY[valid_mask] = v_transformed[valid_mask][:, 1] + half_image_height
 
@@ -117,18 +120,21 @@ def remapping360_torch(output_width, output_height, image_width, image_height, y
 # Yaw around Z, Pitch around Y, Roll around X
 
 
+@line_profiler.profile
 def Rz(alpha):
   return torch.tensor([[math.cos(alpha), -math.sin(alpha), 0],
                       [math.sin(alpha), math.cos(alpha), 0],
                       [0, 0, 1]])
 
 
+@line_profiler.profile
 def Ry(beta):
   return torch.tensor([[math.cos(beta), 0, math.sin(beta)],
                       [0, 1, 0],
                       [-math.sin(beta), 0, math.cos(beta)]])
 
 
+@line_profiler.profile
 def Rx(gamma):
   return torch.tensor([[1, 0, 0],
                       [0, math.cos(gamma), -math.sin(gamma)],
