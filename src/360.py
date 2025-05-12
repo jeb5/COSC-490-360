@@ -1,8 +1,10 @@
+import signal
+import sys
 import cv2 as cv
-import remapping360
+import remap_360
 import helpers
 import csv
-from VideoWriter import VideoWriter
+from video_writer import VideoWriter
 import math
 import remap
 import torch
@@ -44,17 +46,27 @@ def main(args):
   undistortMap = torch.stack((m1, m2), dim=-1)
   undistortMap = remap.absoluteToRelative(undistortMap, input_size)
 
-  output_vectors = remapping360.getFrameOutputVectors(out_w, out_h, device)
+  output_vectors = remap_360.getFrameOutputVectors(out_w, out_h, device)
   background = None
+
+  def cleanup():
+    input_video.release()
+    if args.output_path is not None:
+      output_video.save_video()
+    print("Done.")
+
+  def interuppt_handler(signum, frame):
+    cleanup()
+    sys.exit(0)
+
+  signal.signal(signal.SIGINT, interuppt_handler)
+
   with open(args.rotation_path, 'r') as csvfile:
     reader = csv.reader(csvfile)
-    next(reader)
-    i = 0
     for row in reader:
-      i += 1
-      if i > 100:
-        break
       frame, pitch, yaw, roll = map(float, row)
+      # if frame > 100:
+      #   break
       yaw += math.pi / 2
       degMult = 180 / torch.pi
       pitchdeg, rolldeg, yawdeg = pitch * degMult, roll * degMult, yaw * degMult
@@ -66,8 +78,8 @@ def main(args):
       image1 = torch.from_numpy(image1).to(device).float()
       image1 = remap.torch_remap(undistortMap, image1)
 
-      mapX, mapY = remapping360.remapping360_torch(out_w, out_h, in_w, in_h, yaw, pitch,
-                                                   roll, newFocalLength, output_vectors, device)
+      mapX, mapY = remap_360.remapping360_torch(out_w, out_h, in_w, in_h, yaw, pitch,
+                                                roll, newFocalLength, output_vectors, device)
       mx, my = torch.from_numpy(mapX).to(device), torch.from_numpy(mapY).to(device)
       map360 = torch.stack((mx, my), dim=-1)
       map360 = remap.absoluteToRelative(map360, (in_w, in_h))
@@ -79,8 +91,7 @@ def main(args):
         background = helpers.add_transparent_image_torch(background, dst)
 
       output_video.write_frame(background)
-  input_video.release()
-  output_video.save_video()
+  cleanup()
 
 if __name__ == "__main__":
   parser = argparse.ArgumentParser(description="Remap rotating fotoage to 360 video")

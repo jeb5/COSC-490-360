@@ -2,7 +2,7 @@ import cv2 as cv
 import remap
 import helpers
 import torch
-from VideoWriter import VideoWriter
+from video_writer import VideoWriter
 import argparse
 
 

@@ -1,2 +1,2 @@
 #!/bin/bash
-python src/360.py input/balloon_sample.mp4 input/ballon_sample.csv output/balloon_sample.mp4 --scale 0.5
+python src/360.py output/balloon_test.mp4 temp/balloon_test.csv output/balloon_test_mapped.mp4 --scale 0.25

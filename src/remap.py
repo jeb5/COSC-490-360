@@ -4,6 +4,8 @@ import numpy as np
 import cv2 as cv
 import line_profiler
 
+import helpers
+
 # Maps are:
 # [h, w, 2], where the last dimension is (x, y) (between -1 and 1)
 
@@ -23,17 +25,22 @@ def combineRemappings(map1, map2):
 
 @line_profiler.profile
 def torch_remap(map, image):
+  has_alpha = image.shape[2] == 4
   image = image.clone().permute(2, 0, 1).unsqueeze(0)
-  image_alpha = image[:, 3:4, :, :]
   image_matte = image[:, 0:3, :, :]
+  image_alpha = image[:, 3:4, :, :]
+  if not has_alpha:
+    image_alpha = torch.full_like(image_matte[:, 0:1, :, :], 255)
   map = map.clone().unsqueeze(0)
 
   matte_result = torch.nn.functional.grid_sample(image_matte, map, mode='bilinear', padding_mode='reflection', align_corners=True) # padding mode border unavailable on MPS
   alpha_result = torch.nn.functional.grid_sample(image_alpha, map, mode='bilinear', padding_mode='zeros', align_corners=True)
 
-  result = torch.cat((matte_result, alpha_result), dim=1)
+  result = torch.cat((matte_result, alpha_result), dim=1).squeeze(0).permute(1, 2, 0)
+  if not has_alpha:
+    result = helpers.BGRAToBGRAlphaBlack_torch(result)
 
-  return result.squeeze(0).permute(1, 2, 0)
+  return result
 
 
 @line_profiler.profile

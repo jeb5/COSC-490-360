@@ -10,6 +10,9 @@ spatialmedia = {git = "https://github.com/google/spatial-media.git"}
 torchvision = "*"
 pillow = "*"
 line-profiler = "*"
+av = "*"
+matplotlib = "*"
+scipy = "*"
 
 [dev-packages]
 
