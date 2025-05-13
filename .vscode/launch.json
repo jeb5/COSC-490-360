@@ -16,7 +16,7 @@
 				"68000",
 				"--end_frame",
 				"70000",
-				"--add_angle_text"
+				"--debug"
 			]
 		}
 	]

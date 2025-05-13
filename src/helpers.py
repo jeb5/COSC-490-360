@@ -51,6 +51,16 @@ def add_transparent_image(background, foreground):
 # Images are BGRA [h, w, 4]
 
 
+def paste_cv(background, foreground, x, y):
+  fgx1, fgy1 = max(-x, 0), max(-y, 0)
+  fgx2, fgy2 = min(x + foreground.shape[1], background.shape[1]) - x, min(y + foreground.shape[0], background.shape[0]) - y
+  if fgx1 >= fgx2 or fgy1 >= fgy2:
+    return background
+  bgx1, bgy1 = x + fgx1, y + fgy1
+  bgx2, bgy2 = x + fgx2, y + fgy2
+  background[bgy1:bgy2, bgx1:bgx2] = foreground[fgy1:fgy2, fgx1:fgx2]
+  return background
+
 def add_transparent_image_torch(background, foreground):
   fg_alpha = foreground[:, :, 3] / 255.0
   bg_alpha = background[:, :, 3] / 255.0

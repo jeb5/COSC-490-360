@@ -18,48 +18,22 @@ from scipy.spatial.transform import Rotation as R
 
 def main(args):
 
-
-  number_of_lines = -1  # Skip header
-  with open(args.gyro_csv_path, 'r') as csvfile:
-    reader = csv.reader(csvfile)
-    for row in reader:
-      number_of_lines += 1
-  gyro = np.zeros((number_of_lines, 3)).astype(np.float32)
-  pitch_yaw_roll = np.zeros((number_of_lines, 3)).astype(np.float32)
-  acc = np.zeros((number_of_lines, 3)).astype(np.float32)
-  frame_number = np.zeros((number_of_lines, 1)).astype(np.uint32)
-  print("reading gyro data from CSV file...")
-  with open(args.gyro_csv_path, 'r') as csvfile:
-    reader = csv.reader(csvfile)
-    next(reader)
-    for i, row in enumerate(reader):
-      frame_number[i] = [float(row[0])]
-      # XYZ
-      gyro[i] = [float(row[2]), float(row[3]), float(row[4])]
-      # Pitch, Yaw, Roll
-      pitch_yaw_roll[i] = [float(row[5]), float(row[6]), float(row[7])]
-      # XYZ
-      acc[i] = [float(row[8]), float(row[9]), float(row[10])]
-
-  print("gyro data read from CSV file")
   input_video = cv.VideoCapture(args.video_path)
   if not input_video.isOpened():
     print("Error opening video file")
     return
+
   input_size = int(input_video.get(cv.CAP_PROP_FRAME_WIDTH)), int(input_video.get(cv.CAP_PROP_FRAME_HEIGHT))
-  last_frame = int(input_video.get(cv.CAP_PROP_FRAME_COUNT))
   input_framerate = int(input_video.get(cv.CAP_PROP_FPS))
-  if args.output_video is not None:
-    output_video = VideoWriter(args.output_video, input_framerate, input_size)
-  i = 0
-  (start_frame, end_frame) = (args.start_frame, args.end_frame if args.end_frame >= 0 else last_frame)
+  (start_frame, end_frame) = (args.start_frame, args.end_frame if args.end_frame >= 0 else int(input_video.get(cv.CAP_PROP_FRAME_COUNT)))
 
   cam_matrix, cam_distortion = helpers.GOPRO_CAMERA
-  newMat = cv.fisheye.estimateNewCameraMatrixForUndistortRectify(cam_matrix, cam_distortion, input_size, None, None, 1, input_size, 1)
-  m1, m2 = cv.fisheye.initUndistortRectifyMap(cam_matrix, cam_distortion, None, newMat, input_size, cv.CV_32FC1)
-  m1, m2 = torch.from_numpy(m1), torch.from_numpy(m2)
-  undistortMap = torch.stack((m1, m2), dim=-1)
-  undistortMap = remap.absoluteToRelative(undistortMap, input_size)
+  sensible_undistorted_cam_mat = cv.fisheye.estimateNewCameraMatrixForUndistortRectify(
+    cam_matrix, cam_distortion, input_size, None, None, 1, input_size, 1)
+  m1, m2 = cv.fisheye.initUndistortRectifyMap(cam_matrix, cam_distortion, None, sensible_undistorted_cam_mat, input_size, cv.CV_32FC1)
+
+  if args.output_video is not None:
+    output_video = VideoWriter(args.output_video, input_framerate, input_size)
 
   def cleanup():
     input_video.release()
@@ -67,82 +41,57 @@ def main(args):
       output_video.save_video()
     print("Done.")
 
-  def interuppt_handler(signum, frame):
+  def interupt_handler(signum, frame):
     cleanup()
     sys.exit(0)
+  signal.signal(signal.SIGINT, interupt_handler)
 
-  signal.signal(signal.SIGINT, interuppt_handler)
-
-  initial_rotation = None
-  visual_rotation = R.from_euler('zyx', np.array([0, 0, 0]))
-
-  last_frame = None
-  angle_vector_history = np.empty((0, 3))
-  new_fangled_rotation = R.from_euler('ZYX', np.array([0, 0, 0])).as_matrix()
+  visual_rotations = []
+  inertial_rotations = []
+  previous_frame = None
   with open(args.output_angle_path, 'w') as csvfile:
-    for frame in range(start_frame, end_frame, 1):
-      indices = np.where(frame_number == frame)[0]
-      pitch_yaw_rolls = pitch_yaw_roll[indices]
-      # average_pitch_yaw_roll = np.mean(pitch_yaw_rolls, axis=0)
-      pitch_yaw_roll_frame = pitch_yaw_rolls[0]
+    for (frame, yaw_pitch_roll) in inertials_from_csv(args.gyro_csv_path, start_frame, end_frame):
 
-      pitch = pitch_yaw_roll_frame[0]
-      yaw = pitch_yaw_roll_frame[1]
-      roll = pitch_yaw_roll_frame[2]
-      yaw, roll = roll, yaw  # These seem to be swapped in the CSV file
-      # pitch = pitch - 90
-      roll = -roll
-      # Get video frame
       input_video.set(cv.CAP_PROP_POS_FRAMES, frame)
       ret, image = input_video.read()
-
-      image_undistorted = remap.torch_remap(undistortMap, torch.from_numpy(image).float()).byte().numpy()
-      angle_difference, matchImage = np.zeros((3, 1)), image_undistorted
-      if last_frame is None:
-        initial_rotation = R.from_euler('YXZ', np.array([yaw, pitch, roll]))
-        new_fangled_rotation = R.from_euler('XYZ', np.array([yaw, pitch, roll])).as_matrix()
-      else:
-        angle_difference, matchImage, real_rot_mat = get_angle_difference(last_frame, image_undistorted, newMat)
-        new_fangled_rotation = new_fangled_rotation @ real_rot_mat
-        angle_vector = (new_fangled_rotation @ np.array([0, 0, 1]).T).T
-        print("angle_vector", angle_vector)
-        angle_vector_history = np.append(angle_vector_history, [angle_vector], axis=0)
-        visual_rotation = visual_rotation * angle_difference
-        vector_plot = generate_vector_history_plot(angle_vector_history)
-        y_offset, y_end = int(matchImage.shape[0] - vector_plot.shape[0]), int(matchImage.shape[0])
-        x_offset, x_end = int(matchImage.shape[1] - vector_plot.shape[1]), int(matchImage.shape[1])
-        matchImage[y_offset:y_end, x_offset:x_end] = vector_plot
-
-      visual_rotation_print = visual_rotation.as_euler('YXZ', degrees=True)
-      total_rotation = initial_rotation * visual_rotation
-      total_rotation_print = total_rotation.as_euler('YXZ', degrees=True)
-
-      new_fangled_rotation_print = R.from_matrix(new_fangled_rotation).as_euler('YXZ', degrees=True)
-      (pitch, yaw, roll) = new_fangled_rotation_print
-      last_frame = image_undistorted
-
-      print(f"Writing frame {i + 1}/{end_frame - start_frame}")
       if not ret:
         print("Error reading video frame")
         break
+      image_undistorted = cv.remap(image, m1, m2, cv.INTER_LINEAR)
+
+      yaw_pitch_roll = np.array(yaw_pitch_roll)
+      yaw_pitch_roll += np.array([0, -90, 0])
+      yaw_pitch_roll *= np.array([1, -1, 1])
+
+      inertial_rotations.append(R.from_euler('YXZ', yaw_pitch_roll, degrees=True).as_matrix())
+      match_image = None
+      if frame == start_frame:
+        visual_rotations.append(inertial_rotations[-1])
+        match_image = image_undistorted.copy()
+      else:
+        visual_rotation_change, match_image = get_angle_difference(previous_frame, image_undistorted, sensible_undistorted_cam_mat)
+        visual_rotations.append(visual_rotations[-1] @ visual_rotation_change)
+
+      vector_plot = generate_rotation_histories_plot([{"name": "Visual", "colour": "#42a7f5", "data": visual_rotations}, {
+                                                     "name": "Inertial", "colour": "#f07d0a", "data": inertial_rotations}])
+      (x, y) = match_image.shape[1] - vector_plot.shape[1], match_image.shape[0] - vector_plot.shape[0]
+      match_image = helpers.paste_cv(match_image, vector_plot, x, y)
+
+      print(f"Writing frame {frame - start_frame + 1}/{end_frame - start_frame}")
+
       if args.output_video is not None:
         if args.debug:
-          angleText = "\
-Visual Pitch: {:.1f}\n\
-Visual Yaw: {:.1f}\n\
-Visual Roll: {:.1f}\n\
-Pitch: {:.1f}\n\
-Yaw: {:.1f}\n\
-Roll: {:.1f}".format(
-            visual_rotation_print[1], visual_rotation_print[0], visual_rotation_print[2], pitch, yaw, roll)
-          image_debug = add_text_to_image(matchImage, angleText)
+          angleText = f"Inertial Yaw: {yaw_pitch_roll[0]:.2f}, Pitch: {yaw_pitch_roll[1]:.2f}, Roll: {yaw_pitch_roll[2]:.2f}"
+          visual_rot_YXZ = R.from_matrix(visual_rotations[-1]).as_euler('YXZ', degrees=True)
+          angleText += f"\nVisual   Yaw: {visual_rot_YXZ[0]:.2f}, Pitch: {visual_rot_YXZ[1]:.2f}, Roll: {visual_rot_YXZ[2]:.2f}"
+          image_debug = add_text_to_image(match_image, angleText)
           output_video.write_frame_opencv(image_debug)
         else:
           output_video.write_frame_opencv(image)
+      previous_frame = image_undistorted.copy()
 
-      toRad = np.pi / 180
-      csvfile.write("{},{},{},{}\n".format(i, pitch * toRad, yaw * toRad, roll * toRad))
-      i += 1
+      # toRad = np.pi / 180
+      # csvfile.write("{},{},{},{}\n".format(i, pitch * toRad, yaw * toRad, roll * toRad))
   cleanup()
 
 
@@ -155,6 +104,25 @@ def add_text_to_image(image, text):
   image_cv = cv.cvtColor(np.array(pil_image), cv.COLOR_RGB2BGR)
   return image_cv
 
+
+def inertials_from_csv(csv_path, first_frame, last_frame):
+  current_frame = first_frame
+  frame_with_yaw_pitch_roll = None
+  with open(csv_path, 'r') as csvfile:
+    reader = csv.reader(csvfile)
+    # skip header
+    next(reader)
+    for i, row in enumerate(reader):
+      frame_number = int(row[0])
+      if frame_number < first_frame:
+        continue
+      if frame_number > last_frame:
+        yield frame_with_yaw_pitch_roll
+        break
+      if frame_number > current_frame:
+        current_frame = frame_number
+        yield frame_with_yaw_pitch_roll
+      frame_with_yaw_pitch_roll = (current_frame, (float(row[7]), float(row[5]), float(row[6])))
 
 def get_angle_difference(frame1, frame2, cameraMatrix):
   sift = cv.SIFT_create()
@@ -190,39 +158,47 @@ def get_angle_difference(frame1, frame2, cameraMatrix):
     return np.zeros((3, 1)), frame2
   H, mask = cv.findHomography(good_points_1, good_points_2, cv.RANSAC, 5.0)
 
-  matchImage = frame2.copy()
+  match_image = frame2.copy()
   for i in range(len(good_points_1)):
     if mask[i]:
       pt1 = tuple(map(int, good_points_1[i]))
       pt2 = tuple(map(int, good_points_2[i]))
-      cv.line(matchImage, pt1, pt2, (0, 0, 255), 1)
+      cv.line(match_image, pt1, pt2, (0, 0, 255), 1)
 
   ret, rotations, translations, normals = cv.decomposeHomographyMat(H, cameraMatrix)
   real_rot_mat = rotations[0]
-  rotation = R.from_matrix(rotations[0])
-  return (rotation, matchImage, real_rot_mat)
+  return real_rot_mat, match_image
+  # rotation = R.from_matrix(rotations[0])
+  # return (rotation, matchImage, real_rot_mat)
 
 
-def generate_vector_history_plot(vector_history):
-  fig, ax = plt.subplots(subplot_kw={"projection": "3d"})
-  xs, ys, zs = vector_history[:, 0], vector_history[:, 1], vector_history[:, 2]
-  ax.scatter(xs, ys, zs, c='red', marker='o')
+def generate_rotation_histories_plot(rotation_histories):
+  fig = plt.figure(figsize=(4, 4))  # Make the figure smaller
+  ax = fig.add_subplot(111, projection="3d")
+  for rotation_history in rotation_histories:
+    name = rotation_history["name"]
+    colour = rotation_history["colour"]
+    rotations = rotation_history["data"]
+    vectors = [rotation @ np.array([0, 0, 1]) for rotation in rotations]
+    vector_history = np.array(vectors)
+    xs, ys, zs = vector_history[:, 0], vector_history[:, 1], vector_history[:, 2]
+    ax.quiver(0, 0, 0, xs[-1], ys[-1], zs[-1], length=1, normalize=True, color=colour, arrow_length_ratio=0.2)
+    ax.scatter(xs, ys, zs, c=colour, marker='.', label=name)
   ax.set_xlabel('X')
   ax.set_ylabel('Y')
   ax.set_zlabel('Z')
   ax.set_xlim(-1, 1)
   ax.set_ylim(-1, 1)
   ax.set_zlim(-1, 1)
-  # Draw last vector as an arrow
-  ax.quiver(0, 0, 0, xs[-1], ys[-1], zs[-1], length=1, normalize=True, color='red')
-  # return plot as image
-  # fig.show()
+  ax.legend()
+
   fig.canvas.draw()
-  image = np.frombuffer(fig.canvas.tostring_argb(), dtype=np.uint8)
-  w, h = fig.canvas.get_width_height()
-  image = image.reshape(h * 2, w * 2, 4)
-  image = image[:, :, 1:4]
+  w, h = fig.canvas.get_width_height(physical=True)
   plt.close(fig)
+  image = np.frombuffer(fig.canvas.tostring_argb(), dtype=np.uint8)
+  image = image.reshape(h, w, 4)
+  image = image[:, :, 1:4]
+  image = cv.cvtColor(image, cv.COLOR_RGB2BGR)
   return image
 
 # ZYX = YAW, PITCH, ROLL
