@@ -17,7 +17,7 @@ def main(args):
   torch.set_printoptions(precision=3, sci_mode=False)
   input_video = cv.VideoCapture(args.video_path)
 
-  cam_matrix, cam_distortion = helpers.GOPRO_CAMERA
+  cam_matrix, cam_distortion = helpers.BLENDER_CAMERA
 
   in_w, in_h = int(input_video.get(cv.CAP_PROP_FRAME_WIDTH)), int(input_video.get(cv.CAP_PROP_FRAME_HEIGHT))
   input_size = (in_w, in_h)

@@ -3,6 +3,7 @@ import cv2 as cv
 import torch
 import torchvision
 
+
 # 100
 GOPRO_CAMERA = (
 	np.array([[1050.14, 0.0, 947.65],
@@ -12,7 +13,7 @@ GOPRO_CAMERA = (
 )
 
 # 100mm = 1920 pixels
-# focal length = 1050 pixels, so focal length = 1050/1920 * 100 = 54.68mm
+# focal length = 1050 pixels, so focal length = 1050/1920 * 100 = 54.6875mm
 BLENDER_CAMERA = (
 	np.array([[1050, 0.0, 1920.0 / 2],
            [0.0, 1050, 1080.0 / 2],

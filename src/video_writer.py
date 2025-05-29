@@ -100,10 +100,11 @@ class VideoWriter:
     #   print("FFmpeg error:", e.output.decode())
     #   self.__cleanup__()
     #   raise
-    if self.spherical_metadata:
-      addSphericalMetadata(self.temp_path, self.filename)
-    else:
-      shutil.move(self.temp_path, self.filename)
+    if self.frame_number != 0:
+      if self.spherical_metadata:
+        addSphericalMetadata(self.temp_path, self.filename)
+      else:
+        shutil.move(self.temp_path, self.filename)
 
     self.__cleanup__()
 

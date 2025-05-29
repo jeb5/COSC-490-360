@@ -9,7 +9,6 @@ import matplotlib.pyplot as plt
 import argparse
 import helpers
 import torch
-import remap
 import sys
 import signal
 from video_writer import VideoWriter
@@ -27,18 +26,23 @@ def main(args):
   input_framerate = int(input_video.get(cv.CAP_PROP_FPS))
   (start_frame, end_frame) = (args.start_frame, args.end_frame if args.end_frame >= 0 else int(input_video.get(cv.CAP_PROP_FRAME_COUNT)))
 
-  cam_matrix, cam_distortion = helpers.GOPRO_CAMERA
-  sensible_undistorted_cam_mat = cv.fisheye.estimateNewCameraMatrixForUndistortRectify(
-    cam_matrix, cam_distortion, input_size, None, None, 1, input_size, 1)
-  m1, m2 = cv.fisheye.initUndistortRectifyMap(cam_matrix, cam_distortion, None, sensible_undistorted_cam_mat, input_size, cv.CV_32FC1)
+  cam_matrix, cam_distortion = helpers.GOPRO_CAMERA if args.gopro else helpers.BLENDER_CAMERA
+  new_cam_mat = cv.fisheye.estimateNewCameraMatrixForUndistortRectify(
+    cam_matrix, cam_distortion, input_size, None, None, 1, input_size, 1) if args.gopro else cam_matrix
+  if args.gopro:
+    m1, m2 = cv.fisheye.initUndistortRectifyMap(cam_matrix, cam_distortion, None, new_cam_mat, input_size, cv.CV_32FC1)
 
   if args.output_video is not None:
     output_video = VideoWriter(args.output_video, input_framerate, input_size)
+  if args.output_debug_video is not None:
+    output_debug_video = VideoWriter(args.output_debug_video, input_framerate, input_size)
 
   def cleanup():
     input_video.release()
     if args.output_video is not None:
       output_video.save_video()
+    if args.output_debug_video is not None:
+      output_debug_video.save_video()
     print("Done.")
 
   def interupt_handler(signum, frame):
@@ -50,17 +54,17 @@ def main(args):
   inertial_rotations = []
   previous_frame = None
   with open(args.output_angle_path, 'w') as csvfile:
-    for (frame, yaw_pitch_roll) in inertials_from_csv(args.gyro_csv_path, start_frame, end_frame):
+    for (frame, yaw_pitch_roll) in inertials_from_csv(args, start_frame, end_frame):
 
       input_video.set(cv.CAP_PROP_POS_FRAMES, frame)
       ret, image = input_video.read()
       if not ret:
         print("Error reading video frame")
         break
-      image_undistorted = cv.remap(image, m1, m2, cv.INTER_LINEAR)
+      image_undistorted = cv.remap(image, m1, m2, cv.INTER_LINEAR) if args.gopro else image
 
       yaw_pitch_roll = np.array(yaw_pitch_roll)
-      yaw_pitch_roll += np.array([0, -90, 0])
+      # yaw_pitch_roll += np.array([0, -90, 0])
       yaw_pitch_roll *= np.array([1, -1, 1])
 
       inertial_rotations.append(R.from_euler('YXZ', yaw_pitch_roll, degrees=True).as_matrix())
@@ -69,7 +73,7 @@ def main(args):
         visual_rotations.append(inertial_rotations[-1])
         match_image = image_undistorted.copy()
       else:
-        visual_rotation_change, match_image = get_angle_difference(previous_frame, image_undistorted, sensible_undistorted_cam_mat)
+        visual_rotation_change, match_image = get_angle_difference(previous_frame, image_undistorted, new_cam_mat)
         visual_rotations.append(visual_rotations[-1] @ visual_rotation_change)
 
       vector_plot = generate_rotation_histories_plot([{"name": "Visual", "colour": "#42a7f5", "data": visual_rotations}, {
@@ -79,19 +83,19 @@ def main(args):
 
       print(f"Writing frame {frame - start_frame + 1}/{end_frame - start_frame}")
 
+      visual_rot_YXZ = R.from_matrix(visual_rotations[-1]).as_euler('YXZ', degrees=True)
+      if args.output_debug_video is not None:
+        angleText = f"Inertial Yaw: {yaw_pitch_roll[0]:.2f}, Pitch: {yaw_pitch_roll[1]:.2f}, Roll: {yaw_pitch_roll[2]:.2f}"
+        angleText += f"\nVisual   Yaw: {visual_rot_YXZ[0]:.2f}, Pitch: {visual_rot_YXZ[1]:.2f}, Roll: {visual_rot_YXZ[2]:.2f}"
+        image_debug = add_text_to_image(match_image, angleText)
+        output_debug_video.write_frame_opencv(image_debug)
       if args.output_video is not None:
-        if args.debug:
-          angleText = f"Inertial Yaw: {yaw_pitch_roll[0]:.2f}, Pitch: {yaw_pitch_roll[1]:.2f}, Roll: {yaw_pitch_roll[2]:.2f}"
-          visual_rot_YXZ = R.from_matrix(visual_rotations[-1]).as_euler('YXZ', degrees=True)
-          angleText += f"\nVisual   Yaw: {visual_rot_YXZ[0]:.2f}, Pitch: {visual_rot_YXZ[1]:.2f}, Roll: {visual_rot_YXZ[2]:.2f}"
-          image_debug = add_text_to_image(match_image, angleText)
-          output_video.write_frame_opencv(image_debug)
-        else:
           output_video.write_frame_opencv(image)
       previous_frame = image_undistorted.copy()
 
-      # toRad = np.pi / 180
-      # csvfile.write("{},{},{},{}\n".format(i, pitch * toRad, yaw * toRad, roll * toRad))
+      toRad = np.pi / 180
+      csvfile.write("{},{},{},{}\n".format(frame - start_frame,
+                    yaw_pitch_roll[1] * toRad, yaw_pitch_roll[0] * toRad, yaw_pitch_roll[2] * toRad))
   cleanup()
 
 
@@ -105,7 +109,9 @@ def add_text_to_image(image, text):
   return image_cv
 
 
-def inertials_from_csv(csv_path, first_frame, last_frame):
+def inertials_from_csv(args, first_frame, last_frame):
+  csv_path = args.gyro_csv_path
+  gopro = args.gopro
   current_frame = first_frame
   frame_with_yaw_pitch_roll = None
   with open(csv_path, 'r') as csvfile:
@@ -122,7 +128,8 @@ def inertials_from_csv(csv_path, first_frame, last_frame):
       if frame_number > current_frame:
         current_frame = frame_number
         yield frame_with_yaw_pitch_roll
-      frame_with_yaw_pitch_roll = (current_frame, (float(row[7]), float(row[5]), float(row[6])))
+      frame_with_yaw_pitch_roll = (current_frame, (float(row[7]), float(row[5]), float(row[6]))) if gopro else (
+        current_frame, (float(row[2]), float(row[1]), float(row[3])))
 
 def get_angle_difference(frame1, frame2, cameraMatrix):
   sift = cv.SIFT_create()
@@ -173,7 +180,7 @@ def get_angle_difference(frame1, frame2, cameraMatrix):
 
 
 def generate_rotation_histories_plot(rotation_histories):
-  fig = plt.figure(figsize=(4, 4))  # Make the figure smaller
+  fig = plt.figure(figsize=(4, 4))
   ax = fig.add_subplot(111, projection="3d")
   for rotation_history in rotation_histories:
     name = rotation_history["name"]
@@ -182,11 +189,11 @@ def generate_rotation_histories_plot(rotation_histories):
     vectors = [rotation @ np.array([0, 0, 1]) for rotation in rotations]
     vector_history = np.array(vectors)
     xs, ys, zs = vector_history[:, 0], vector_history[:, 1], vector_history[:, 2]
-    ax.quiver(0, 0, 0, xs[-1], ys[-1], zs[-1], length=1, normalize=True, color=colour, arrow_length_ratio=0.2)
-    ax.scatter(xs, ys, zs, c=colour, marker='.', label=name)
-  ax.set_xlabel('X')
-  ax.set_ylabel('Y')
-  ax.set_zlabel('Z')
+    ax.quiver(0, 0, 0, zs[-1], xs[-1], ys[-1], length=1, normalize=True, color=colour, arrow_length_ratio=0.2)
+    ax.plot(zs, xs, ys, c=colour, marker='.', label=name)
+  ax.set_xlabel('Z')
+  ax.set_ylabel('X')
+  ax.set_zlabel('Y')
   ax.set_xlim(-1, 1)
   ax.set_ylim(-1, 1)
   ax.set_zlim(-1, 1)
@@ -228,8 +235,9 @@ if __name__ == "__main__":
   parser.add_argument("gyro_csv_path", type=str, help="Path to the gyro CSV file.")
   parser.add_argument("output_angle_path", type=str, help="Path to the output angle CSV file.")
   parser.add_argument("--output_video", type=str, help="Path to the output video file.")
+  parser.add_argument("--output_debug_video", type=str, help="Path to the debug output video file.")
   parser.add_argument("--start_frame", type=int, default=0, help="Start frame for processing.")
   parser.add_argument("--end_frame", type=int, default=-1, help="End frame for processing.")
-  parser.add_argument("--debug", action='store_true', help="Enable debug mode to ouput angles, matches and undistorted image.")
+  parser.add_argument("--gopro", action='store_true', help="Use GoPro camera settings.")
   args = parser.parse_args()
   main(args)
