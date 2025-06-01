@@ -75,20 +75,25 @@ def main(args):
       else:
         visual_rotation_change, match_image = get_angle_difference(previous_frame, image_undistorted, new_cam_mat)
         visual_rotations.append(visual_rotations[-1] @ visual_rotation_change)
+        # visual_rotations.append(visual_rotation_change @ visual_rotations[-1])
 
-      vector_plot = generate_rotation_histories_plot([{"name": "Visual", "colour": "#42a7f5", "data": visual_rotations}, {
-                                                     "name": "Inertial", "colour": "#f07d0a", "data": inertial_rotations}])
-      (x, y) = match_image.shape[1] - vector_plot.shape[1], match_image.shape[0] - vector_plot.shape[0]
-      match_image = helpers.paste_cv(match_image, vector_plot, x, y)
 
       print(f"Writing frame {frame - start_frame + 1}/{end_frame - start_frame}")
 
       visual_rot_YXZ = R.from_matrix(visual_rotations[-1]).as_euler('YXZ', degrees=True)
       if args.output_debug_video is not None:
-        angleText = f"Inertial Yaw: {yaw_pitch_roll[0]:.2f}, Pitch: {yaw_pitch_roll[1]:.2f}, Roll: {yaw_pitch_roll[2]:.2f}"
-        angleText += f"\nVisual   Yaw: {visual_rot_YXZ[0]:.2f}, Pitch: {visual_rot_YXZ[1]:.2f}, Roll: {visual_rot_YXZ[2]:.2f}"
-        image_debug = add_text_to_image(match_image, angleText)
-        output_debug_video.write_frame_opencv(image_debug)
+        angleText = ""
+        angleText += f"Frame {frame - start_frame + 1}/{end_frame - start_frame}"
+        angleText += f"\nInertial:\n{yaw_pitch_roll[0]:6.2f}y {yaw_pitch_roll[1]:6.2f}p {yaw_pitch_roll[2]:6.2f}r"
+        angleText += f"\nVisual:\n{visual_rot_YXZ[0]:6.2f}y {visual_rot_YXZ[1]:6.2f}p {visual_rot_YXZ[2]:6.2f}r"
+
+        vector_plot = generate_rotation_histories_plot([{"name": "Visual", "colour": "#42a7f5", "data": visual_rotations}, {
+            "name": "Inertial", "colour": "#f07d0a", "data": inertial_rotations}], extra_text=angleText)
+        (x, y) = match_image.shape[1] - vector_plot.shape[1], match_image.shape[0] - vector_plot.shape[0]
+        match_image = helpers.paste_cv(match_image, vector_plot, x, y)
+
+        # image_debug = add_text_to_image(match_image, angleText)
+        output_debug_video.write_frame_opencv(match_image)
       if args.output_video is not None:
           output_video.write_frame_opencv(image)
       previous_frame = image_undistorted.copy()
@@ -174,14 +179,31 @@ def get_angle_difference(frame1, frame2, cameraMatrix):
 
   ret, rotations, translations, normals = cv.decomposeHomographyMat(H, cameraMatrix)
   real_rot_mat = rotations[0]
+
+  # frame1_warped = cv.warpPerspective(frame1, H, (frame1.shape[1], frame1.shape[0]))
+  # dest = frame2.copy()
+  # cv.addWeighted(frame1_warped, 0.5, dest, 0.5, 0, dest)
+  # cv.imwrite("debug_pano_frame.png", dest)
+
   return real_rot_mat, match_image
   # rotation = R.from_matrix(rotations[0])
   # return (rotation, matchImage, real_rot_mat)
 
 
-def generate_rotation_histories_plot(rotation_histories):
-  fig = plt.figure(figsize=(4, 4))
-  ax = fig.add_subplot(111, projection="3d")
+def generate_rotation_histories_plot(rotation_histories, extra_text=None):
+  # # Create a blank figure above the main plot, with the same width
+  text_fig = plt.figure(figsize=(3, 1))
+  ax_text = text_fig.add_subplot()
+  ax_text.axis('off')
+  ax_text.text(0, 1.0, extra_text, fontsize=12, ha='left', va='top', wrap=True,
+               color='black', transform=ax_text.transAxes, fontfamily="monospace", fontweight='bold')
+
+  text_fig.tight_layout()
+
+  # Main 3D plot
+  main_fig = plt.figure(figsize=(3, 3))
+  ax_main = main_fig.add_subplot(projection="3d")
+  ax_main.set_box_aspect(aspect=None, zoom=1)
   for rotation_history in rotation_histories:
     name = rotation_history["name"]
     colour = rotation_history["colour"]
@@ -189,16 +211,25 @@ def generate_rotation_histories_plot(rotation_histories):
     vectors = [rotation @ np.array([0, 0, 1]) for rotation in rotations]
     vector_history = np.array(vectors)
     xs, ys, zs = vector_history[:, 0], vector_history[:, 1], vector_history[:, 2]
-    ax.quiver(0, 0, 0, zs[-1], xs[-1], ys[-1], length=1, normalize=True, color=colour, arrow_length_ratio=0.2)
-    ax.plot(zs, xs, ys, c=colour, marker='.', label=name)
-  ax.set_xlabel('Z')
-  ax.set_ylabel('X')
-  ax.set_zlabel('Y')
-  ax.set_xlim(-1, 1)
-  ax.set_ylim(-1, 1)
-  ax.set_zlim(-1, 1)
-  ax.legend()
+    ax_main.quiver(0, 0, 0, zs[-1], xs[-1], ys[-1], length=1, normalize=True, color=colour, arrow_length_ratio=0.2)
+    ax_main.plot(zs, xs, ys, c=colour, marker='.', label=name)
+  ax_main.set_xlabel('X', labelpad=-10)
+  ax_main.set_ylabel('Z', labelpad=-10)
+  ax_main.set_zlabel('Y', labelpad=-10)
+  ax_main.set_xlim(-1, 1)
+  ax_main.set_ylim(-1, 1)
+  ax_main.set_zlim(-1, 1)
+  # ax_main.legend()
+  ax_main.set_xticklabels([])
+  ax_main.set_yticklabels([])
+  ax_main.set_zticklabels([])
 
+  text_image = figure_to_cv_image(text_fig)
+  main_image = figure_to_cv_image(main_fig)
+  return np.vstack((text_image, main_image))
+
+
+def figure_to_cv_image(fig):
   fig.canvas.draw()
   w, h = fig.canvas.get_width_height(physical=True)
   plt.close(fig)
@@ -206,6 +237,7 @@ def generate_rotation_histories_plot(rotation_histories):
   image = image.reshape(h, w, 4)
   image = image[:, :, 1:4]
   image = cv.cvtColor(image, cv.COLOR_RGB2BGR)
+
   return image
 
 # ZYX = YAW, PITCH, ROLL

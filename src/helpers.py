@@ -2,6 +2,8 @@ import numpy as np
 import cv2 as cv
 import torch
 import torchvision
+import matplotlib.font_manager as fm
+import matplotlib.pyplot as plt
 
 
 # 100
@@ -25,6 +27,10 @@ BLENDER_CAMERA_WITH_FISHEYE = (
 	BLENDER_CAMERA[0],
   GOPRO_CAMERA[1]
 )
+
+font_path = 'src/assets/roboto_mono.ttf'
+fm.fontManager.addfont(font_path)
+plt.rcParams['font.monospace'] = fm.FontProperties(fname=font_path).get_name()
 
 def add_transparent_image(background, foreground):
 
