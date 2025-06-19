@@ -17,7 +17,7 @@ def main(args):
   torch.set_printoptions(precision=3, sci_mode=False)
   input_video = cv.VideoCapture(args.video_path)
 
-  cam_matrix, cam_distortion = helpers.BLENDER_CAMERA
+  cam_matrix, cam_distortion = helpers.GOPRO_CAMERA
 
   in_w, in_h = int(input_video.get(cv.CAP_PROP_FRAME_WIDTH)), int(input_video.get(cv.CAP_PROP_FRAME_HEIGHT))
   input_size = (in_w, in_h)
@@ -28,6 +28,7 @@ def main(args):
   horizontal_fov = 2 * math.atan(in_w / (2 * horizontal_focal_length)) * 180 / torch.pi
 
   out_h = int(in_h * (180 / vertical_fov) * args.scale)
+  out_h = out_h // 2 * 2  # Ensure even height
   out_w = out_h * 2
   print(f"Vertical FOV: {vertical_fov:.4f} degrees, Horizontal FOV: {horizontal_fov:.4f} degrees")
   print(f"Output height: {out_h}, Output width: {out_w}")
@@ -64,10 +65,14 @@ def main(args):
   with open(args.rotation_path, 'r') as csvfile:
     reader = csv.reader(csvfile)
     for row in reader:
-      frame, pitch, yaw, roll = map(float, row)
+      frame, pitch, roll, yaw = map(float, row)
       # if frame > 100:
       #   break
-      yaw += math.pi / 2
+      # yaw += math.pi / 2
+      ###
+      radMult = torch.pi / 180
+      pitch, roll, yaw = pitch * radMult, -roll * radMult, yaw * radMult
+      ###
       degMult = 180 / torch.pi
       pitchdeg, rolldeg, yawdeg = pitch * degMult, roll * degMult, yaw * degMult
       print(f"Frame: {frame}, Pitch: {pitchdeg:.2f}, Roll: {rolldeg:.2f}, Yaw: {yawdeg:.2f}")
@@ -78,11 +83,7 @@ def main(args):
       image1 = torch.from_numpy(image1).to(device).float()
       image1 = remap.torch_remap(undistortMap, image1)
 
-      mapX, mapY = remap_360.remapping360_torch(out_w, out_h, in_w, in_h, yaw, pitch,
-                                                roll, newFocalLength, output_vectors, device)
-      mx, my = torch.from_numpy(mapX).to(device), torch.from_numpy(mapY).to(device)
-      map360 = torch.stack((mx, my), dim=-1)
-      map360 = remap.absoluteToRelative(map360, (in_w, in_h))
+      map360 = remap_360.remapping360_torch(out_w, out_h, in_w, in_h, yaw, pitch, roll, newFocalLength, output_vectors)
       dst = remap.torch_remap(map360, image1)
 
       if background is None:
@@ -100,4 +101,5 @@ if __name__ == "__main__":
   parser.add_argument("output_path", type=str, help="Path to the output video file.")
   parser.add_argument("--scale", type=float, default=1.0, help="Scale factor for output video size.")
   args = parser.parse_args()
-  main(args)
+  with torch.no_grad():
+    main(args)

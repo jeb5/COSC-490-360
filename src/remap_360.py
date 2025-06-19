@@ -14,47 +14,36 @@ def getFrameOutputVectors(output_width, output_height, device):
   Sb = torch.sin(y_angles_grid)
 
   output_vectors = torch.stack([Cb * Sa, Sb, Ca * Cb], dim=-1)
-  output_vectors = output_vectors.reshape(-1, 3)
   return output_vectors
 
 
 @line_profiler.profile
-def remapping360_torch(output_width, output_height, image_width, image_height, yaw, pitch, roll, focal_length, output_vectors, device):
+def remapping360_torch(output_width, output_height, image_width, image_height, yaw, pitch, roll, focal_length, output_vectors):
+  # This function no longer uses flattening (Which can result in too-long vectors with lengths over the integer limit)
+  # Also the A[mask] = B[mask] pattern is no longer used, as it occasionally results unreproducible errors
 
   half_image_width, half_image_height = image_width / 2, image_height / 2
-  camera_rotation_matrix = (Ry(-yaw) @ Rx(-pitch) @ Rz(roll)).to(device)
-  inv_camera_rotation_matrix = torch.linalg.inv(camera_rotation_matrix)
+  camera_rotation_matrix = (Ry(-yaw) @ Rx(-pitch) @ Rz(roll)).to(output_vectors.device)
+  # Pitch and yaw negated because image coordinates are (0,0) in top-left corner
 
-  # Flatten for batch processing
-
-  v_transformed = torch.mm(inv_camera_rotation_matrix, output_vectors.T).T
-  valid_mask = v_transformed[:, 2] > 0  # Only keep forward-facing pixels
-  v_transformed *= focal_length / v_transformed[:, 2:3]
-
-  # Undo the flattening (see note below)
-  v_transformed = v_transformed.reshape(output_height, output_width, 3)
+  v_transformed = torch.einsum('hwc, cd -> hwd', output_vectors, camera_rotation_matrix)
   v_transformed[:, :, 1] = -v_transformed[:, :, 1]  # Flip Y axis
-  valid_mask = valid_mask.reshape(output_height, output_width)
+  valid_mask = v_transformed[:, :, 2] > 0  # Only keep forward-facing pixels
+  valid_mask = valid_mask.unsqueeze(-1).expand(-1, -1, 3).type_as(v_transformed)  # Expand mask to match v_transformed shape
+  v_transformed *= focal_length / v_transformed[:, :, 2:3]
+  projected = valid_mask * v_transformed + (1 - valid_mask) * -100000
 
-  mapX = torch.full((output_height, output_width), -100000,
-                    dtype=torch.float32, device=device)
-  mapY = torch.full((output_height, output_width), -100000,
-                    dtype=torch.float32, device=device)
+  mapX = projected[:, :, 0] + half_image_width
+  mapY = projected[:, :, 1] + half_image_height
 
-  # count valid pixels
-  valid_pixels = torch.sum(valid_mask)
-  print(f"Valid pixels: {valid_pixels}")
-  # NOTE: There is an unreproducible bug, where tensor sizes don't match. Loging valid_mask for when it happens
-  mapX[valid_mask] = v_transformed[valid_mask][:, 0] + half_image_width
-  mapY[valid_mask] = v_transformed[valid_mask][:, 1] + half_image_height
+  # return mapX.cpu().numpy(), mapY.cpu().numpy()
 
-  # RIP
-  # Here lies many hours wasted by an infurating bug
-  # Relevant tensors were once flattened, thus having lengthes so large that masking them with a boolean tensor was impossible
-  # The masking behaved very strangely, and eventually I noticed that all the problems started at a suspicious index: 16,777,216
-  # I've therefore unflattened the tensors, and now everything works perfectly
+  # Relative ([-1, 1]) coordinates
+  mapX = mapX * (2 / image_width) - 1
+  mapY = mapY * (2 / image_height) - 1
 
-  return mapX.cpu().numpy(), mapY.cpu().numpy()
+  map = torch.stack((mapX, mapY), dim=-1)  # [h, w, 2]
+  return map
 
 # ZYX = YAW, PITCH, ROLL
 # Yaw around Z, Pitch around Y, Roll around X
