@@ -10,7 +10,7 @@ import PIL.Image
 import matplotlib.pyplot as plt
 import argparse
 import helpers
-import torch
+import shapely
 import sys
 import signal
 from video_writer import VideoWriter
@@ -78,162 +78,215 @@ def main(args):
     inertial_rotations = []
     frame_features = []
 
-    # def serialize_keypoints(kp):
-    #     return [
-    #         (kp.pt[0], kp.pt[1], kp.size, kp.angle, kp.response, kp.octave, kp.class_id)
-    #         for kp in kp
-    #     ]
+    if True:
 
-    # def deserialize_keypoints(serialized_kp):
-    #     return [
-    #         cv.KeyPoint(x, y, size, angle, response, octave, class_id)
-    #         for (x, y, size, angle, response, octave, class_id) in serialized_kp
-    #     ]
-
-    # # Load serialized f"{video_path}/sift.data" into frame_features if it exists
-    # if os.path.exists(f"{args.video_path}.sift.data"):
-    #     with open(f"{args.video_path}.sift.data", "rb") as f:
-    #         frame_features_serialized = pickle.load(f)
-    #         frame_features = [
-    #             (deserialize_keypoints(kp), np.asarray(des, dtype=np.float32))
-    #             for (kp, des) in frame_features_serialized
-    #         ]
-    #     print(f"Loaded {len(frame_features)} frames from sift.data")
-
-    # if len(frame_features) == 0:
-    #     with open(args.gyro_csv_path, "r") as csvfile:
-    #         for frame, xyz in inertials_from_csv(args, start_frame, end_frame):
-    #             input_video.set(cv.CAP_PROP_POS_FRAMES, frame)
-    #             ret, image = input_video.read()
-    #             # print("Read frame ", frame)
-    #             image_undistorted = (
-    #                 cv.remap(image, m1, m2, cv.INTER_LINEAR) if args.gopro else image
-    #             )
-    #             # print("Undistorted frame ", frame)
-    #             frame_features.append(get_features(image_undistorted))
-    #             print("Processed frame", frame)
-    #     with open(f"{args.video_path}.sift.data", "wb") as f:
-
-    #         serialized_frame_features = [
-    #             (serialize_keypoints(kp), des.tolist()) for (kp, des) in frame_features
-    #         ]
-    #         pickle.dump(serialized_frame_features, f)
-
-    # # im1, im2 = 87, 37
-    # # input_video.set(cv.CAP_PROP_POS_FRAMES, im1)
-    # # frame1 = input_video.read()[1]
-    # # # sift1 = get_features(frame)
-    # # sift1 = frame_features[im1]
-    # # input_video.set(cv.CAP_PROP_POS_FRAMES, im2)
-    # # frame2 = input_video.read()[1]
-    # # # sift2 = get_features(frame2)
-    # # sift2 = frame_features[im2]
-    # # match_image = get_angle_difference(sift1, sift2, new_cam_mat, frame1, frame2)[1]
-    # # # Display the match image
-    # # cv.imshow("Match Image", match_image)
-    # # cv.waitKey(0)
-    #
-    # solve_rotations(frame_features, new_cam_mat)
-    # cleanup()
-
-    with open(args.output_angle_path, "w") as csvfile:
         for frame, xyz in inertials_from_csv(args, start_frame, end_frame):
-
-            input_video.set(cv.CAP_PROP_POS_FRAMES, frame)
-            ret, image = input_video.read()
-            if not ret:
-                print("Error reading video frame")
-                break
-            image_undistorted = (
-                cv.remap(image, m1, m2, cv.INTER_LINEAR) if args.gopro else image
-            )
-            frame_features.append(get_features(image_undistorted))
-
             xyz = np.array(xyz)
             zxy = np.array([xyz[2], xyz[0], xyz[1]])
 
-            intertial_rotation = R.from_euler("ZXY", zxy, degrees=True).as_matrix()
-            inertial_rotations.append(intertial_rotation)
-            visual_rotation_change, match_image = None, None
-            if frame == start_frame:
-                visual_rotations.append(inertial_rotations[-1])
-                match_image = image_undistorted.copy()
-            else:
-                # for back in range(min(frame - start_frame, 2), 0, -1):
-                back = 1
-                visual_rotation_change, match_image = get_angle_difference(
-                    frame_features[-1 - back],
-                    frame_features[-1],
-                    new_cam_mat,
-                    image_undistorted,
+            inertial_rotation = R.from_euler("ZXY", zxy, degrees=True).as_matrix()
+
+            inertial_rotations.append(inertial_rotation)
+
+        def serialize_keypoints(kp):
+            return [
+                (
+                    kp.pt[0],
+                    kp.pt[1],
+                    kp.size,
+                    kp.angle,
+                    kp.response,
+                    kp.octave,
+                    kp.class_id,
                 )
-                if visual_rotation_change is None:
-                    raise Exception(
-                        "Not enough good points found for homography estimation."
+                for kp in kp
+            ]
+
+        def deserialize_keypoints(serialized_kp):
+            return [
+                cv.KeyPoint(x, y, size, angle, response, octave, class_id)
+                for (x, y, size, angle, response, octave, class_id) in serialized_kp
+            ]
+
+        # Load serialized f"{video_path}/sift.data" into frame_features if it exists
+        if os.path.exists(f"{args.video_path}.sift.data"):
+            with open(f"{args.video_path}.sift.data", "rb") as f:
+                frame_features_serialized = pickle.load(f)
+                frame_features = [
+                    (deserialize_keypoints(kp), np.asarray(des, dtype=np.float32))
+                    for (kp, des) in frame_features_serialized
+                ]
+            print(f"Loaded {len(frame_features)} frames from sift.data")
+
+        if len(frame_features) == 0:
+            with open(args.gyro_csv_path, "r") as csvfile:
+                for frame, xyz in inertials_from_csv(args, start_frame, end_frame):
+                    input_video.set(cv.CAP_PROP_POS_FRAMES, frame)
+                    ret, image = input_video.read()
+                    # print("Read frame ", frame)
+                    image_undistorted = (
+                        cv.remap(image, m1, m2, cv.INTER_LINEAR)
+                        if args.gopro
+                        else image
                     )
+                    # print("Undistorted frame ", frame)
+                    frame_features.append(get_features(image_undistorted))
+                    print("Processed frame", frame)
+            with open(f"{args.video_path}.sift.data", "wb") as f:
+
+                serialized_frame_features = [
+                    (serialize_keypoints(kp), des.tolist())
+                    for (kp, des) in frame_features
+                ]
+                pickle.dump(serialized_frame_features, f)
+
+        # im1, im2 = 25, 20
+        input_video.set(cv.CAP_PROP_POS_FRAMES, 22)
+        frame1 = input_video.read()[1]
+        # input_video.set(cv.CAP_PROP_POS_FRAMES, im2)
+        # frame2 = input_video.read()[1]
+
+        # intertial_rotation_change = (
+        #     np.linalg.inv(inertial_rotations[im2]) @ inertial_rotations[im1]
+        # )
+        # angle_change = np.linalg.norm(
+        #     R.from_matrix(intertial_rotation_change)
+        #     .from_matrix(intertial_rotation_change)
+        #     .as_rotvec(degrees=True)
+        # )
+        # intertial_overlap_percent = (
+        #     get_homography_overlap_percent(intertial_rotation_change, new_cam_mat)
+        #     if angle_change < 150
+        #     else 0
+        # )
+        # print(
+        #     "Inertial overlap percent: {:.2f}%".format(intertial_overlap_percent * 100)
+        # )
+        # print("angle change: {:.2f} degrees".format(angle_change))
+        # overlay = overlay_homography(frame1, intertial_rotation_change, new_cam_mat)
+        # cv.imshow("Overlay", overlay)
+        # cv.waitKey(0)
+        # cv.destroyAllWindows()
+
+        # sift = cv.SIFT_create()
+        # sift = cv.SIFT_create(contrastThreshold=0.02, edgeThreshold=5)
+
+        # Detect keypoints
+        # keypoints = sift.detect(frame1, None)
+        kp, des = get_features(frame1)
+
+        # Draw keypoints on the original image
+        img_with_kp = cv.drawKeypoints(
+            frame1, kp, None, flags=cv.DRAW_MATCHES_FLAGS_DRAW_RICH_KEYPOINTS
+        )
+
+        # Show the image
+        cv.imshow("SIFT Features", img_with_kp)
+        cv.waitKey(0)
+        cv.destroyAllWindows()
+
+        # solve_rotations(frame_features, new_cam_mat, inertial_rotations)
+
+    else:
+        with open(args.output_angle_path, "w") as csvfile:
+            for frame, xyz in inertials_from_csv(args, start_frame, end_frame):
+
+                input_video.set(cv.CAP_PROP_POS_FRAMES, frame)
+                ret, image = input_video.read()
+                if not ret:
+                    print("Error reading video frame")
+                    break
+                image_undistorted = (
+                    cv.remap(image, m1, m2, cv.INTER_LINEAR) if args.gopro else image
+                )
+                frame_features.append(get_features(image_undistorted))
+
+                xyz = np.array(xyz)
+                zxy = np.array([xyz[2], xyz[0], xyz[1]])
+
+                inertial_rotation = R.from_euler("ZXY", zxy, degrees=True).as_matrix()
+
+                inertial_rotations.append(inertial_rotation)
+                visual_rotation_change, match_image = None, None
+                if frame == start_frame:
+                    visual_rotations.append(inertial_rotations[-1])
+                    match_image = image_undistorted.copy()
                 else:
-                    visual_rotations.append(
-                        visual_rotations[-back] @ visual_rotation_change
+
+                    back = 1
+                    visual_rotation_change, match_image, _ = get_angle_difference(
+                        frame_features[-1 - back],
+                        frame_features[-1],
+                        new_cam_mat,
+                        image_undistorted,
                     )
+                    if visual_rotation_change is None:
+                        raise Exception(
+                            "Not enough good points found for homography estimation."
+                        )
+                    else:
+                        visual_rotations.append(
+                            visual_rotations[-back] @ visual_rotation_change
+                        )
 
-            print(
-                f"Writing frame {frame - start_frame + 1}/{end_frame - start_frame + 1}"
-            )
+                print(
+                    f"Writing frame {frame - start_frame + 1}/{end_frame - start_frame + 1}"
+                )
 
-            visual_rot_ZXY = R.from_matrix(visual_rotations[-1]).as_euler(
-                "ZXY", degrees=True
-            )
-            if args.output_debug_video is not None:
-                angleText = ""
-                angleText += (
-                    f"Frame {frame - start_frame + 1}/{end_frame - start_frame + 1}"
+                visual_rot_ZXY = R.from_matrix(visual_rotations[-1]).as_euler(
+                    "ZXY", degrees=True
                 )
-                angleText += (
-                    f"\nInertial:\n{zxy[0]:6.2f}y {zxy[1]:6.2f}p {zxy[2]:6.2f}r"
-                )
-                angleText += f"\nVisual:\n{visual_rot_ZXY[0]:6.2f}y {visual_rot_ZXY[1]:6.2f}p {visual_rot_ZXY[2]:6.2f}r"
-                if visual_rotation_change is not None:
-                    visual_rot_ZXY_change = R.from_matrix(
-                        visual_rotation_change
-                    ).as_euler("ZXY", degrees=True)
-                    angleText += f"\nChange:\n{visual_rot_ZXY_change[0]:6.2f}y {visual_rot_ZXY_change[1]:6.2f}p {visual_rot_ZXY_change[2]:6.2f}r"
+                if args.output_debug_video is not None:
+                    angleText = ""
+                    angleText += (
+                        f"Frame {frame - start_frame + 1}/{end_frame - start_frame + 1}"
+                    )
+                    angleText += (
+                        f"\nInertial:\n{zxy[0]:6.2f}y {zxy[1]:6.2f}p {zxy[2]:6.2f}r"
+                    )
+                    angleText += f"\nVisual:\n{visual_rot_ZXY[0]:6.2f}y {visual_rot_ZXY[1]:6.2f}p {visual_rot_ZXY[2]:6.2f}r"
+                    if visual_rotation_change is not None:
+                        visual_rot_ZXY_change = R.from_matrix(
+                            visual_rotation_change
+                        ).as_euler("ZXY", degrees=True)
+                        angleText += f"\nChange:\n{visual_rot_ZXY_change[0]:6.2f}y {visual_rot_ZXY_change[1]:6.2f}p {visual_rot_ZXY_change[2]:6.2f}r"
 
-                vector_plot = generate_rotation_histories_plot(
-                    [
-                        {
-                            "name": "Visual",
-                            "colour": "#42a7f5",
-                            "data": visual_rotations,
-                        },
-                        {
-                            "name": "Inertial",
-                            "colour": "#f07d0a",
-                            "data": inertial_rotations,
-                        },
-                    ],
-                    extra_text=angleText,
-                    # extra_rot=visual_rotation_change,
-                )
-                (x, y) = (
-                    match_image.shape[1] - vector_plot.shape[1],
-                    match_image.shape[0] - vector_plot.shape[0],
-                )
-                match_image = helpers.paste_cv(match_image, vector_plot, x, y)
+                    vector_plot = generate_rotation_histories_plot(
+                        [
+                            {
+                                "name": "Visual",
+                                "colour": "#42a7f5",
+                                "data": visual_rotations,
+                            },
+                            {
+                                "name": "Inertial",
+                                "colour": "#f07d0a",
+                                "data": inertial_rotations,
+                            },
+                        ],
+                        extra_text=angleText,
+                        # extra_rot=visual_rotation_change,
+                    )
+                    (x, y) = (
+                        match_image.shape[1] - vector_plot.shape[1],
+                        match_image.shape[0] - vector_plot.shape[0],
+                    )
+                    match_image = helpers.paste_cv(match_image, vector_plot, x, y)
 
-                # image_debug = add_text_to_image(match_image, angleText)
-                output_debug_video.write_frame_opencv(match_image)
-            if args.output_video is not None:
-                output_video.write_frame_opencv(image)
+                    # image_debug = add_text_to_image(match_image, angleText)
+                    output_debug_video.write_frame_opencv(match_image)
+                if args.output_video is not None:
+                    output_video.write_frame_opencv(image)
 
-            # Outputtting visual rotation (in xyz order)
-            csvfile.write(
-                "{},{},{},{}\n".format(
-                    frame - start_frame,
-                    visual_rot_ZXY[1],
-                    visual_rot_ZXY[2],
-                    visual_rot_ZXY[0],
+                # Outputtting visual rotation (in xyz order)
+                csvfile.write(
+                    "{},{},{},{}\n".format(
+                        frame - start_frame,
+                        visual_rot_ZXY[1],
+                        visual_rot_ZXY[2],
+                        visual_rot_ZXY[0],
+                    )
                 )
-            )
     cleanup()
 
 
@@ -247,7 +300,7 @@ def add_text_to_image(image, text):
     return image_cv
 
 
-def solve_rotations(sift_features, cameraMatrix):
+def solve_rotations(sift_features, cameraMatrix, inertial_rotations):
     # Take list of frame features (SIFT lists)
     # For each frame, get with ALL previous frames (n^2, or more precisely, n(n-1)/2)
     # For each match pair, estimate rotation using homography. If not enough points, skip.
@@ -257,28 +310,63 @@ def solve_rotations(sift_features, cameraMatrix):
     # Now given 3 values of z, we reconstruct the rotation matrices R^{i} for each frame i.
     # These will be rotation matrices in a common coordinate frame, however not the world coordinate frame.
     # If we know the world coordinate frame of the first frame, we can rotate all matricies to the world coordinate frame.
+    frame_relations_picture = np.zeros(
+        (len(sift_features) * 2, len(sift_features), 3), dtype=np.uint8
+    )
     matches = []
     for i in range(len(sift_features)):
         for j in range(0, i):
-            match_rot, _ = get_angle_difference(
+            match_rot, _, extra_info = get_angle_difference(
                 sift_features[i], sift_features[j], cameraMatrix
             )
+
+            intertial_rotation_change = (
+                np.linalg.inv(inertial_rotations[j]) @ inertial_rotations[i]
+            )
+            angle_change = np.linalg.norm(
+                R.from_matrix(intertial_rotation_change)
+                .from_matrix(intertial_rotation_change)
+                .as_rotvec(degrees=True)
+            )
+            intertial_overlap_percent = (
+                get_homography_overlap_percent(intertial_rotation_change, cameraMatrix)
+                if angle_change < 150
+                else 0
+            )
+            frame_relations_picture[i * 2 + 1, j, 1] = intertial_overlap_percent * 255
             if match_rot is not None:
                 matches.append((i, j, match_rot))
+                frame_relations_picture[i * 2, j, 0] = 255
+                frame_relations_picture[i * 2, j, 2] = (
+                    min(math.log10(extra_info["orthonormality"] + 1), 1)
+                ) * 255
 
-                print(f"Match found between frames {i} and {j}")
-
-    pass
+                print(f"Match found between frames {i+1} and {j+1}")
+    # Save the frame relations picture
+    cv.imwrite("temp/frame_relations.png", frame_relations_picture)
 
 
 def get_features(frame):
-    kp, des = get_features.sift.detectAndCompute(frame, None)
+    threshold_multiplier = 1.0
+    kp, des = None, None
+    while True:
+        sift = cv.SIFT_create(
+            nfeatures=5000,
+            contrastThreshold=0.04 * threshold_multiplier,
+            edgeThreshold=10 * threshold_multiplier,
+        )
+        kp, des = sift.detectAndCompute(frame, None)
+        if len(kp) < 150:
+            threshold_multiplier *= 0.8
+        else:
+            break
+        print(threshold_multiplier)
+
     # kp = get_features.orb.detect(frame, None)
     # kp, des = get_features.orb.compute(frame, kp)
     return (kp, des)
 
 
-get_features.sift = cv.SIFT_create()
 # get_features.orb = cv.ORB_create()
 
 
@@ -310,7 +398,37 @@ def inertials_from_csv(args, first_frame, last_frame):
             yield frame_with_xyz
 
 
-def get_angle_difference(features1, features2, cameraMatrix, frame1=None, frame2=None):
+def overlay_homography(image, rotation, cameraMatrix):
+    H = cameraMatrix @ global_rotation_to_visual(rotation) @ np.linalg.inv(cameraMatrix)
+    w, h = cameraMatrix[0, 2] * 2, cameraMatrix[1, 2] * 2
+    np_coords = np.array(
+        [
+            [0, 0, 1],
+            [w, 0, 1],
+            [w, h, 1],
+            [0, h, 1],
+            [0, 0, 1],
+        ]
+    )
+    transformed_coords = (H @ np_coords.T).T
+    transformed_coords = transformed_coords / np.abs(
+        transformed_coords[:, 2:3]
+    )  # Normalize by z
+    transformed_coords = transformed_coords[:, :2]  # Drop z coordinate
+
+    cv.polylines(
+        image,
+        [np.int32(transformed_coords)],
+        isClosed=True,
+        color=(0, 255, 0),
+        thickness=2,
+    )
+    return image
+
+
+def get_angle_difference(
+    features1, features2, cameraMatrix, current_frame=None, previous_frame=None
+):
     kp1, des1 = features1
     kp2, des2 = features2
 
@@ -328,44 +446,59 @@ def get_angle_difference(features1, features2, cameraMatrix, frame1=None, frame2
         m, n = matchPairs
         if m.distance < 0.7 * n.distance:
             matchesMask[i] = [1, 0]
-            good_points_1.append(kp1[m.queryIdx].pt)
-            good_points_2.append(kp2[m.trainIdx].pt)
+            gp1 = kp1[m.queryIdx].pt
+            gp2 = kp2[m.trainIdx].pt
+            good_points_1.append(gp1)
+            good_points_2.append(gp2)
+
     good_points_1 = np.array(good_points_1)
     good_points_2 = np.array(good_points_2)
 
     if len(good_points_1) < 4:
         # print("Not enough good points found for homography estimation.")
-        return (None, None)
+        return (None, None, None)
     # TODO: Test different thresholds, methods (USAC, RANSAC, ETC)
     H, mask = cv.findHomography(good_points_1, good_points_2, cv.USAC_MAGSAC, 0.25)
     # TODO: Do a local optimization on inlier points to improve the homography matrix
     if H is None:
-        return (None, None)
+        return (None, None, None)
     extracted_rotation = np.linalg.inv(cameraMatrix) @ H @ cameraMatrix
-    U, _, Vt = np.linalg.svd(extracted_rotation)
-    # orthonormalized_rotation = U @ Vt
-    orthonormalized_rotation = extracted_rotation
-    orthnormality = np.linalg.norm(
-        orthonormalized_rotation @ orthonormalized_rotation.T - np.eye(3)
+
+    orthonormality = np.linalg.norm(
+        extracted_rotation @ extracted_rotation.T - np.eye(3)
     )
-    print(f"Orthonormality: {orthnormality:.4f}")
+    # print(f"Orthonormality: {orthnormality:.4f}")
+
+    U, _, Vt = np.linalg.svd(extracted_rotation)
+    orthonormalized_rotation = U @ Vt
+
+    if np.linalg.det(orthonormalized_rotation) < 0:
+        return (None, None, None)
+
+    rotation = visual_rotation_to_global(orthonormalized_rotation)
 
     inliers = np.sum(mask)
-    # if inliers < 20:
-    #     return (None, None)
+    if inliers < 10 or orthonormality > 1.8:
+        return (None, None, None)
+    print(orthonormality, inliers)
+
+    bestH = cameraMatrix @ orthonormalized_rotation @ np.linalg.inv(cameraMatrix)
+    overlap_percent = get_homography_overlap_percent(rotation, cameraMatrix)
+    print(f"Visual overlap percent: {overlap_percent*100:.2f}%")
+
     match_image = None
-    if frame1 is not None:
-        if frame2 is not None:
+    if current_frame is not None:
+        if previous_frame is not None:
             match_image = np.hstack(
                 (
                     cv.drawKeypoints(
-                        frame1,
+                        current_frame,
                         kp1,
                         None,
                         flags=cv.DRAW_MATCHES_FLAGS_DRAW_RICH_KEYPOINTS,
                     ),
                     cv.drawKeypoints(
-                        frame2,
+                        previous_frame,
                         kp2,
                         None,
                         flags=cv.DRAW_MATCHES_FLAGS_DRAW_RICH_KEYPOINTS,
@@ -373,33 +506,23 @@ def get_angle_difference(features1, features2, cameraMatrix, frame1=None, frame2
                 )
             )
         else:
-            match_image = frame1.copy()
+            match_image = current_frame.copy()
+            match_image = cv.drawKeypoints(
+                match_image, kp2, None, flags=cv.DRAW_MATCHES_FLAGS_DRAW_RICH_KEYPOINTS
+            )
+
             for i in range(len(good_points_1)):
                 if mask[i]:
                     pt1 = tuple(map(int, good_points_1[i]))
                     pt2 = tuple(map(int, good_points_2[i]))
                     cv.line(match_image, pt1, pt2, (0, 0, 255), 1)
+            match_image = overlay_homography(match_image, rotation, cameraMatrix)
 
-    ret, rotations, translations, normals = cv.decomposeHomographyMat(H, cameraMatrix)
-    # real_rot_mat = rotations[0]
-    real_rot_mat = orthonormalized_rotation
-    if ret == 0 or np.isnan(real_rot_mat).any() or np.isinf(real_rot_mat).any():
-        return (None, match_image)
-
-    # went from XYZ to ZXY
-    reorder_mat = np.array([[-1, 0, 0], [0, 0, 1], [0, 1, 0]])
-    real_rot_mat = reorder_mat.T @ real_rot_mat @ reorder_mat
-    # reverse roll
-    if (
-        np.linalg.det(real_rot_mat) < 0
-    ):  # I don't know why non-positive determinants occur, but they do
-        return (None, match_image)
-    zxy = R.from_matrix(real_rot_mat).as_euler("ZXY", degrees=True)
-    real_rot_mat = R.from_euler(
-        "ZXY", [zxy[0], zxy[1], -zxy[2]], degrees=True
-    ).as_matrix()
-
-    return real_rot_mat, match_image
+    extra_info = dict(
+        overlap_percent=overlap_percent,
+        orthonormality=orthonormality,
+    )
+    return rotation, match_image, extra_info
 
 
 index_params = dict(algorithm=1, trees=5)
@@ -407,6 +530,26 @@ index_params = dict(algorithm=1, trees=5)
 # index_params = dict(algorithm=6, table_number=6, key_size=12, multi_probe_level=1)
 search_params = dict(checks=50)
 get_angle_difference.flann = cv.FlannBasedMatcher(index_params, search_params)
+
+
+def visual_rotation_to_global(visual_rotation):
+    # Convert from y-up to z-up
+    reorder_mat = np.array([[1, 0, 0], [0, 0, -1], [0, -1, 0]])
+    rotation = reorder_mat.T @ visual_rotation @ reorder_mat
+    # Reverse roll
+    zxy = R.from_matrix(rotation).as_euler("ZXY", degrees=True)
+    rotation = R.from_euler("ZXY", [zxy[0], zxy[1], -zxy[2]], degrees=True).as_matrix()
+    return rotation
+
+
+def global_rotation_to_visual(global_rotation):
+    # Reverse roll
+    zxy = R.from_matrix(global_rotation).as_euler("ZXY", degrees=True)
+    rotation = R.from_euler("ZXY", [zxy[0], zxy[1], -zxy[2]], degrees=True).as_matrix()
+    # Convert from z-up to y-up
+    reorder_mat = np.array([[1, 0, 0], [0, 0, -1], [0, -1, 0]])
+    rotation = reorder_mat @ rotation @ reorder_mat.T
+    return rotation
 
 
 def generate_rotation_histories_plot(
@@ -509,33 +652,66 @@ def figure_to_cv_image(fig):
 
 
 def Rz(alpha):
-    return torch.tensor(
+    return np.array(
         [
-            [math.cos(alpha), -math.sin(alpha), 0],
-            [math.sin(alpha), math.cos(alpha), 0],
+            [np.cos(alpha), -np.sin(alpha), 0],
+            [np.sin(alpha), np.cos(alpha), 0],
             [0, 0, 1],
         ]
     )
 
-
 def Ry(beta):
-    return torch.tensor(
+    return np.array(
         [
-            [math.cos(beta), 0, math.sin(beta)],
+            [np.cos(beta), 0, np.sin(beta)],
             [0, 1, 0],
-            [-math.sin(beta), 0, math.cos(beta)],
+            [-np.sin(beta), 0, np.cos(beta)],
         ]
     )
-
 
 def Rx(gamma):
-    return torch.tensor(
+    return np.array(
         [
             [1, 0, 0],
-            [0, math.cos(gamma), -math.sin(gamma)],
-            [0, math.sin(gamma), math.cos(gamma)],
+            [0, np.cos(gamma), -np.sin(gamma)],
+            [0, np.sin(gamma), np.cos(gamma)],
         ]
     )
+
+
+def get_homography_overlap_percent(rotation, cameraMatrix):
+    np.set_printoptions(precision=3, suppress=True)
+    H = cameraMatrix @ global_rotation_to_visual(rotation) @ np.linalg.inv(cameraMatrix)
+    w, h = cameraMatrix[0, 2] * 2, cameraMatrix[1, 2] * 2
+    np_coords = np.array(
+        [
+            [0, 0, 1],
+            [w, 0, 1],
+            [w, h, 1],
+            [0, h, 1],
+            [0, 0, 1],
+        ]
+    )
+    normal_coords = np_coords[:, :2]
+    transformed_coords = (H @ np_coords.T).T
+    transformed_coords = transformed_coords / np.abs(
+        transformed_coords[:, 2:3]
+    )  # Normalize by z
+    transformed_coords = transformed_coords[:, :2]  # Drop z coordinate
+
+    normal_rect = shapely.Polygon(normal_coords)
+    transformed_rect = shapely.Polygon(transformed_coords)
+    transformed_linear_ring = shapely.LinearRing(transformed_coords)
+    if not transformed_linear_ring.is_ccw:
+        return 0.0
+
+    overlap = 0.0
+    try:
+        overlap = normal_rect.intersection(transformed_rect).area
+    except shapely.errors.GEOSException:
+        pass
+    normal_area = normal_rect.area
+    return overlap / normal_area
 
 
 if __name__ == "__main__":

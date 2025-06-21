@@ -13,6 +13,7 @@ line-profiler = "*"
 av = "*"
 matplotlib = "*"
 scipy = "*"
+shapely = "*"
 
 [dev-packages]
 
