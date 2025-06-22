@@ -140,52 +140,7 @@ def main(args):
                 ]
                 pickle.dump(serialized_frame_features, f)
 
-        # im1, im2 = 25, 20
-        input_video.set(cv.CAP_PROP_POS_FRAMES, 22)
-        frame1 = input_video.read()[1]
-        # input_video.set(cv.CAP_PROP_POS_FRAMES, im2)
-        # frame2 = input_video.read()[1]
-
-        # intertial_rotation_change = (
-        #     np.linalg.inv(inertial_rotations[im2]) @ inertial_rotations[im1]
-        # )
-        # angle_change = np.linalg.norm(
-        #     R.from_matrix(intertial_rotation_change)
-        #     .from_matrix(intertial_rotation_change)
-        #     .as_rotvec(degrees=True)
-        # )
-        # intertial_overlap_percent = (
-        #     get_homography_overlap_percent(intertial_rotation_change, new_cam_mat)
-        #     if angle_change < 150
-        #     else 0
-        # )
-        # print(
-        #     "Inertial overlap percent: {:.2f}%".format(intertial_overlap_percent * 100)
-        # )
-        # print("angle change: {:.2f} degrees".format(angle_change))
-        # overlay = overlay_homography(frame1, intertial_rotation_change, new_cam_mat)
-        # cv.imshow("Overlay", overlay)
-        # cv.waitKey(0)
-        # cv.destroyAllWindows()
-
-        # sift = cv.SIFT_create()
-        # sift = cv.SIFT_create(contrastThreshold=0.02, edgeThreshold=5)
-
-        # Detect keypoints
-        # keypoints = sift.detect(frame1, None)
-        kp, des = get_features(frame1)
-
-        # Draw keypoints on the original image
-        img_with_kp = cv.drawKeypoints(
-            frame1, kp, None, flags=cv.DRAW_MATCHES_FLAGS_DRAW_RICH_KEYPOINTS
-        )
-
-        # Show the image
-        cv.imshow("SIFT Features", img_with_kp)
-        cv.waitKey(0)
-        cv.destroyAllWindows()
-
-        # solve_rotations(frame_features, new_cam_mat, inertial_rotations)
+        solve_rotations(frame_features, new_cam_mat, inertial_rotations)
 
     else:
         with open(args.output_angle_path, "w") as csvfile:
@@ -330,15 +285,15 @@ def solve_rotations(sift_features, cameraMatrix, inertial_rotations):
             )
             intertial_overlap_percent = (
                 get_homography_overlap_percent(intertial_rotation_change, cameraMatrix)
-                if angle_change < 150
-                else 0
+                # if angle_change < 150
+                # else 0
             )
             frame_relations_picture[i * 2 + 1, j, 1] = intertial_overlap_percent * 255
             if match_rot is not None:
                 matches.append((i, j, match_rot))
                 frame_relations_picture[i * 2, j, 0] = 255
                 frame_relations_picture[i * 2, j, 2] = (
-                    min(math.log10(extra_info["orthonormality"] + 1), 1)
+                    min(extra_info["inliers_dice"] * 4, 1)
                 ) * 255
 
                 print(f"Match found between frames {i+1} and {j+1}")
@@ -467,7 +422,6 @@ def get_angle_difference(
     orthonormality = np.linalg.norm(
         extracted_rotation @ extracted_rotation.T - np.eye(3)
     )
-    # print(f"Orthonormality: {orthnormality:.4f}")
 
     U, _, Vt = np.linalg.svd(extracted_rotation)
     orthonormalized_rotation = U @ Vt
@@ -476,15 +430,12 @@ def get_angle_difference(
         return (None, None, None)
 
     rotation = visual_rotation_to_global(orthonormalized_rotation)
+    overlap_percent = get_homography_overlap_percent(rotation, cameraMatrix)
 
     inliers = np.sum(mask)
-    if inliers < 10 or orthonormality > 1.8:
+    inliers_dice = (2 * inliers) / (len(kp1) + len(kp2))
+    if inliers_dice < 0.03 or overlap_percent < 0.1:
         return (None, None, None)
-    print(orthonormality, inliers)
-
-    bestH = cameraMatrix @ orthonormalized_rotation @ np.linalg.inv(cameraMatrix)
-    overlap_percent = get_homography_overlap_percent(rotation, cameraMatrix)
-    print(f"Visual overlap percent: {overlap_percent*100:.2f}%")
 
     match_image = None
     if current_frame is not None:
@@ -521,6 +472,8 @@ def get_angle_difference(
     extra_info = dict(
         overlap_percent=overlap_percent,
         orthonormality=orthonormality,
+        inliers=inliers,
+        inliers_dice=inliers_dice,
     )
     return rotation, match_image, extra_info
 
