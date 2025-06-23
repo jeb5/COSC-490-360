@@ -32,6 +32,7 @@ class VideoWriter:
 
     self.frame_number = 0
     self.closed = False
+    self.dirty = False
 
     def cleanup_handler(signum, frame):
       self.__cleanup__()
@@ -50,6 +51,9 @@ class VideoWriter:
       # shutil.rmtree(self.temp_dir)
       self.closed = True
 
+  def did_write(self):
+    return self.dirty
+
   # Frame is a tensor of shape (H, W, C), BGRA
   @line_profiler.profile
   def write_frame(self, frame):
@@ -61,6 +65,7 @@ class VideoWriter:
     for packet in self.stream.encode(frame_updated):
       self.container.mux(packet)
     self.frame_number += 1
+    self.dirty = True
 
   @line_profiler.profile
   def write_frame_opencv(self, frame):
@@ -70,6 +75,7 @@ class VideoWriter:
     for packet in self.stream.encode(frame_updated):
       self.container.mux(packet)
     self.frame_number += 1
+    self.dirty = True
 
   def save_video(self):
     if self.closed:

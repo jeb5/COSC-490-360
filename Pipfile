@@ -14,6 +14,7 @@ av = "*"
 matplotlib = "*"
 scipy = "*"
 shapely = "*"
+progressbar2 = "*"
 
 [dev-packages]
 

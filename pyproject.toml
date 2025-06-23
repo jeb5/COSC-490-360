@@ -23,3 +23,7 @@ dependencies = [
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.ruff]
+line-length = 130
+indent-width = 2
