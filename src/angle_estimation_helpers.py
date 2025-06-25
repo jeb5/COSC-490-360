@@ -52,24 +52,55 @@ def get_features(image, lower_bound=200):
   return (kp, des)
 
 
-def visual_rotation_to_global(visual_rotation):
-  # Convert from y-up to z-up
-  reorder_mat = np.array([[1, 0, 0], [0, 0, -1], [0, -1, 0]])
-  rotation = reorder_mat.T @ visual_rotation @ reorder_mat
-  # Reverse roll
-  zxy = R.from_matrix(rotation).as_euler("ZXY", degrees=True)
-  rotation = R.from_euler("ZXY", [zxy[0], zxy[1], -zxy[2]], degrees=True).as_matrix()
-  return rotation
+def visual_rotation_to_global(rotation):
+  # # Convert from y-up to z-up
+  # reorder_mat = np.array([[1, 0, 0], [0, 0, -1], [0, -1, 0]])
+  # rotation = reorder_mat.T @ visual_rotation @ reorder_mat
+  # # Reverse roll
+  # zxy = R.from_matrix(rotation).as_euler("ZXY", degrees=True)
+  # rotation = R.from_euler("ZXY", [zxy[0], zxy[1], -zxy[2]], degrees=True).as_matrix()
+  # return rotation
+  return np.array(
+    [
+      [rotation[0, 0], rotation[2, 0], -rotation[1, 0]],
+      [rotation[0, 2], rotation[2, 2], -rotation[1, 2]],
+      [-rotation[0, 1], -rotation[2, 1], rotation[1, 1]],
+    ]
+  )
+  # return rotation
 
 
-def global_rotation_to_visual(global_rotation):
-  # Reverse roll
-  zxy = R.from_matrix(global_rotation).as_euler("ZXY", degrees=True)
-  rotation = R.from_euler("ZXY", [zxy[0], zxy[1], -zxy[2]], degrees=True).as_matrix()
-  # Convert from z-up to y-up
-  reorder_mat = np.array([[1, 0, 0], [0, 0, -1], [0, -1, 0]])
-  rotation = reorder_mat @ rotation @ reorder_mat.T
-  return rotation
+def entire_transformation(rotation):
+  # reorder_mat = np.array([[1, 0, 0], [0, 0, -1], [0, -1, 0]])
+  # rotation = reorder_mat.T @ rotation @ reorder_mat
+  # zxy = R.from_matrix(rotation).as_euler("ZXY", degrees=True)
+  # rotation = R.from_euler("ZXY", [-zxy[0], -zxy[1], zxy[2]], degrees=True).as_matrix()
+  # rotation = rotation.T
+  # return rotation
+  return np.array(
+    [
+      [rotation[0, 0], rotation[2, 0], -rotation[1, 0]],
+      [rotation[0, 2], rotation[2, 2], -rotation[1, 2]],
+      [-rotation[0, 1], -rotation[2, 1], rotation[1, 1]],
+    ]
+  )
+
+
+def global_rotation_to_visual(rotation):
+  # # Reverse roll
+  # zxy = R.from_matrix(global_rotation).as_euler("ZXY", degrees=True)
+  # rotation = R.from_euler("ZXY", [zxy[0], zxy[1], -zxy[2]], degrees=True).as_matrix()
+  # # Convert from z-up to y-up
+  # reorder_mat = np.array([[1, 0, 0], [0, 0, -1], [0, -1, 0]])
+  # rotation = reorder_mat @ rotation @ reorder_mat.T
+  # return rotation
+  return np.array(
+    [
+      [rotation[0, 0], -rotation[2, 0], rotation[1, 0]],
+      [-rotation[0, 2], rotation[2, 2], -rotation[1, 2]],
+      [rotation[0, 1], -rotation[2, 1], rotation[1, 1]],
+    ]
+  )
 
 
 def get_homography_overlap_percent(rotation, cameraMatrix):

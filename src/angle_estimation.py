@@ -6,9 +6,11 @@ import argparse
 import torch
 from angle_estimation_helpers import (
   cache_features,
+  entire_transformation,
   generate_rotation_histories_plot,
   get_features,
   get_homography_overlap_percent,
+  global_rotation_to_visual,
   load_features,
   overlay_homography,
   visual_rotation_to_global,
@@ -105,7 +107,7 @@ def main(args):
   # solve_rotations(frame_features, new_cam_mat, inertial_rotations)
 
   visual_rotations = []
-  if False:
+  if True:
     visual_rotations = chain_rotations(
       frame_features,
       inertial_rotations,
@@ -121,6 +123,46 @@ def main(args):
     )
   else:
     visual_rotations = solve_rotations(frame_features, new_cam_mat, inertial_rotations, args)
+  # # f1, f2 = 83, 71
+  # j, i = 71, 83
+  # # j, i = 60, 61
+
+  # # f1, f2 = 21, 20
+  # input_video.set(cv.CAP_PROP_POS_FRAMES, j)
+  # j_frame = input_video.read()[1]
+  # input_video.set(cv.CAP_PROP_POS_FRAMES, i)
+  # i_frame = input_video.read()[1]
+  # j_features = frame_features[j - start_frame]
+  # i_features = frame_features[i - start_frame]
+  # visual_rotation_change, match_image, extra_info = get_angle_difference(j_features, i_features, new_cam_mat, i_frame, j_frame)
+  # # backwards, _, _ = get_angle_difference(features2, features1, new_cam_mat, frame1, frame2)
+  # # H1 = new_cam_mat @ global_rotation_to_visual(visual_rotation_change) @ np.linalg.inv(new_cam_mat)
+  # # H2 = new_cam_mat @ global_rotation_to_visual(backwards) @ np.linalg.inv(new_cam_mat)
+
+  # # visual_rotation_change = visual_rotation_change.T
+  # # v_zxy = R.from_matrix(visual_rotation_change).as_euler("ZXY", degrees=True)
+  # # visual_rotation_change = R.from_euler("ZXY", [-v_zxy[0], -v_zxy[1], -v_zxy[2]], degrees=True).as_matrix()
+  # # visual_rotation_change = np.linalg.inv(visual_rotation_change)  # We want i->j not j->i
+  # print(f"Extra info: {extra_info}")
+  # # intertial_rot = inertial_rotations[f1] @ np.linalg.inv(inertial_rotations[f2])
+  # print(f"Intertial start: {R.from_matrix(inertial_rotations[j]).as_euler('ZXY', degrees=True)}")
+  # print(f"Intertial end: {R.from_matrix(inertial_rotations[i]).as_euler('ZXY', degrees=True)}")
+  # # intertial_rot = inertial_rotations[f2] @ np.linalg.inv(inertial_rotations[f1])
+  # intertial_rot = np.linalg.inv(inertial_rotations[j]) @ inertial_rotations[i]
+  # difference = np.linalg.inv(visual_rotation_change) @ intertial_rot
+  # angle_diff = np.linalg.norm(R.from_matrix(difference).as_rotvec(degrees=True))
+  # print(f"Angle difference: {angle_diff:.2f} degrees")
+  # # print visual rotation change zxy
+  # visual_zxy = R.from_matrix(visual_rotation_change).as_euler("ZXY", degrees=True)
+  # print(f"Visual rotation change: {visual_zxy[0]:.2f}y {visual_zxy[1]:.2f}p {visual_zxy[2]:.2f}r")
+  # # print inertial rotation change zxy
+  # inertial_zxy = R.from_matrix(intertial_rot).as_euler("ZXY", degrees=True)
+  # print(f"Inertial rotation change: {inertial_zxy[0]:.2f}y {inertial_zxy[1]:.2f}p {inertial_zxy[2]:.2f}r")
+  # # Show the match image
+  # if match_image is not None:
+  #   cv.imshow("Match Image", match_image)
+  #   cv.waitKey(0)
+  #   cv.destroyAllWindows()
 
   # Outputtting visual rotation (in xyz order)
   with open(args.output_angle_path, "w") as csvfile:
@@ -197,9 +239,6 @@ def chain_rotations(
       if visual_rotation_change is not None:
         visual_zxy_change = R.from_matrix(visual_rotation_change).as_euler("ZXY", degrees=True)
         angleText += f"\nChange:\n{visual_zxy_change[0]:6.2f}y {visual_zxy_change[1]:6.2f}p {visual_zxy_change[2]:6.2f}r"
-        print(
-          f"Frame {i + 1} visual change: {visual_zxy_change[0]:6.2f}y {visual_zxy_change[1]:6.2f}p {visual_zxy_change[2]:6.2f}r"
-        )
       vector_plot = generate_rotation_histories_plot(
         [
           {"name": "Visual", "colour": "#42a7f5", "data": visual_rotations[: i + 1]},
@@ -232,6 +271,7 @@ def find_matches(sift_features, cameraMatrix, inertial_rotations):
     redirect_stdout=True,
   ).start()
   idx = 0
+  total_angle_diff = 0.0
   for i in range(len(sift_features)):
     for j in range(0, i):
       # for j in range(max(i - 1, 0), i):
@@ -251,7 +291,8 @@ def find_matches(sift_features, cameraMatrix, inertial_rotations):
         difference = np.linalg.inv(match_rot) @ intertial_rot
         angle_diff = np.linalg.norm(R.from_matrix(difference).as_rotvec(degrees=True))
         frame_relations_picture[i * 2 + 1, j, 1] = min(angle_diff / 10, 1) * 255
-        if angle_diff > 1:
+        total_angle_diff += angle_diff
+        if angle_diff > 2:
           print("Large angle difference detected:")
           print(f"  Frame {i} to {j}: {angle_diff:.2f} degrees")
           print(f"  Inliers: {extra_info['inliers']}, Dice: {extra_info['inliers_dice']:.2f}")
@@ -260,6 +301,8 @@ def find_matches(sift_features, cameraMatrix, inertial_rotations):
       idx += 1
       bar.update(idx)
   bar.finish()
+  print(f"Average angle difference: {total_angle_diff / len(matches):.2f} degrees")
+  print(f"Total matches found: {len(matches)}")
   cv.imwrite("temp/frame_relations_new.png", frame_relations_picture)
   return matches
 
@@ -308,8 +351,8 @@ def solve_rotations(sift_features, cameraMatrix, inertial_rotations, args):
 
     rotation = initial_correction @ rotation
     visual_rotations.append(rotation)
-    zxy = R.from_matrix(rotation).as_euler("ZXY", degrees=True)
-    print(f"Frame {i}: {zxy[0]:6.2f}y {zxy[1]:6.2f}p {zxy[2]:6.2f}r")
+    # zxy = R.from_matrix(rotation).as_euler("ZXY", degrees=True)
+    # print(f"Frame {i}: {zxy[0]:6.2f}y {zxy[1]:6.2f}p {zxy[2]:6.2f}r")
   generate_rotation_histories_plot(
     [
       {"name": "Visual", "colour": "#42a7f5", "data": visual_rotations},
@@ -331,16 +374,24 @@ def get_angle_difference(features1, features2, cameraMatrix, current_frame=None,
   # flann = cv.FlannBasedMatcher(index_params, search_params)
   # matches = flann.knnMatch(des1, des2, k=2)
   bf = cv.BFMatcher()
-  matches = bf.knnMatch(des1, des2, k=2)
+  matches12 = bf.knnMatch(des1, des2, k=2)
+  matches21 = bf.knnMatch(des2, des1, k=2)
 
-  good_points_1, good_points_2 = [], []
-  for i, matchPairs in enumerate(matches):
+  reverse_map = {}
+  for i, matchPairs in enumerate(matches21):
     if len(matchPairs) == 2:
       m, n = matchPairs
       if m.distance < 0.7 * n.distance:
-        gp1, gp2 = kp1[m.queryIdx].pt, kp2[m.trainIdx].pt
-        good_points_1.append(gp1)
-        good_points_2.append(gp2)
+        reverse_map[m.queryIdx] = m.trainIdx
+  good_points_1, good_points_2 = [], []
+  for i, matchPairs in enumerate(matches12):
+    if len(matchPairs) == 2:
+      m, n = matchPairs
+      if m.distance < 0.7 * n.distance:
+        if m.trainIdx in reverse_map and reverse_map[m.trainIdx] == m.queryIdx:
+          gp1, gp2 = kp1[m.queryIdx].pt, kp2[m.trainIdx].pt
+          good_points_1.append(gp1)
+          good_points_2.append(gp2)
 
   good_points_1 = np.array(good_points_1)
   good_points_2 = np.array(good_points_2)
@@ -348,22 +399,32 @@ def get_angle_difference(features1, features2, cameraMatrix, current_frame=None,
   if len(good_points_1) < 4:
     return (None, None, None)
   H, mask = cv.findHomography(good_points_1, good_points_2, cv.USAC_MAGSAC, 0.25)
-  # TODO: Do a local optimization on inlier points to improve the homography matrix
   if H is None:
     return (None, None, None)
+  inliers = np.sum(mask)
+  inliers_dice = (2 * inliers) / (len(kp1) + len(kp2))
+
+  # if inliers < 50 or inliers_dice < 0.1:
+  # return (None, None, None)
+  if inliers < 4 or inliers_dice < 0.04:
+    return (None, None, None)
+
+  inlier_points_1 = good_points_1[mask.ravel() == 1]
+  inlier_points_2 = good_points_2[mask.ravel() == 1]
+
+  H, _ = cv.findHomography(inlier_points_1, inlier_points_2, 0)  # Least squares refinement
+
   extracted_rotation = np.linalg.inv(cameraMatrix) @ H @ cameraMatrix
   orthonormality = np.linalg.norm(extracted_rotation @ extracted_rotation.T - np.eye(3))
 
   U, _, Vt = np.linalg.svd(extracted_rotation)
   orthonormalized_rotation = U @ Vt
 
-  inliers = np.sum(mask)
-  inliers_dice = (2 * inliers) / (len(kp1) + len(kp2))
-
-  if np.linalg.det(orthonormalized_rotation) < 0 or inliers_dice < 0.1 or inliers < 50:
+  if np.linalg.det(orthonormalized_rotation) < 0:
     return (None, None, None)
 
-  rotation = visual_rotation_to_global(orthonormalized_rotation)
+  # rotation = visual_rotation_to_global(orthonormalized_rotation)
+  rotation = entire_transformation(orthonormalized_rotation)
   overlap_percent = get_homography_overlap_percent(rotation, cameraMatrix)
 
   if overlap_percent < 0.1:
@@ -371,19 +432,36 @@ def get_angle_difference(features1, features2, cameraMatrix, current_frame=None,
 
   match_image = None
   if current_frame is not None:
-    match_image = cv.drawKeypoints(current_frame, kp2, None, flags=cv.DRAW_MATCHES_FLAGS_DRAW_RICH_KEYPOINTS)
+    # match_image = cv.drawKeypoints(current_frame, kp2, None, flags=cv.DRAW_MATCHES_FLAGS_DRAW_RICH_KEYPOINTS)
+    match_image = current_frame.copy()
     if previous_frame is not None:
-      match_image = np.hstack(
-        (
-          cv.drawKeypoints(
-            current_frame,
-            kp1,
-            None,
-            flags=cv.DRAW_MATCHES_FLAGS_DRAW_RICH_KEYPOINTS,
-          ),
-          match_image,
-        )
+      # match_image = np.hstack(
+      #   (
+      #     cv.drawKeypoints(
+      #       previous_frame,
+      #       kp1,
+      #       None,
+      #       flags=cv.DRAW_MATCHES_FLAGS_DRAW_RICH_KEYPOINTS,
+      #     ),
+      #     match_image,
+      #   )
+      # )
+      # for i in range(len(good_points_1)):
+      #   if mask[i] and np.random.rand() < 0.05:
+      #     pt1 = tuple(map(int, good_points_1[i]))
+      #     pt2 = tuple(map(int, good_points_2[i] + np.array([current_frame.shape[1], 0])))
+      #     cv.line(match_image, pt1, pt2, (0, 0, 255), 1)
+
+      # Draw currentframe on top of previous_frame, warped by the homography
+      bestH = cameraMatrix @ orthonormalized_rotation @ np.linalg.inv(cameraMatrix)
+      match_image = cv.warpPerspective(
+        match_image,
+        np.linalg.inv(bestH),
+        (current_frame.shape[1], current_frame.shape[0]),
+        flags=cv.INTER_LINEAR,
       )
+      match_image = cv.addWeighted(match_image, 0.5, previous_frame, 0.5, 0)
+
     else:
       for i in range(len(good_points_1)):
         if mask[i]:
