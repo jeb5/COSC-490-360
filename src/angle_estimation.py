@@ -104,10 +104,8 @@ def main(args):
       frame_features.append(get_features(image_undistorted))
     cache_features(frame_features, features_cache_path)
 
-  # solve_rotations(frame_features, new_cam_mat, inertial_rotations)
-
   visual_rotations = []
-  if True:
+  if False:
     visual_rotations = chain_rotations(
       frame_features,
       inertial_rotations,
@@ -116,55 +114,17 @@ def main(args):
       start_frame,
       end_frame,
       args,
-      output_video if args.output_video is not None else None,
-      output_debug_video if args.output_debug_video is not None else None,
+      # output_video if args.output_video is not None else None,
+      # output_debug_video if args.output_debug_video is not None else None,
+      None,
+      None,
       m1,
       m2,
     )
   else:
     visual_rotations = solve_rotations(frame_features, new_cam_mat, inertial_rotations, args)
-  # # f1, f2 = 83, 71
-  # j, i = 71, 83
-  # # j, i = 60, 61
 
-  # # f1, f2 = 21, 20
-  # input_video.set(cv.CAP_PROP_POS_FRAMES, j)
-  # j_frame = input_video.read()[1]
-  # input_video.set(cv.CAP_PROP_POS_FRAMES, i)
-  # i_frame = input_video.read()[1]
-  # j_features = frame_features[j - start_frame]
-  # i_features = frame_features[i - start_frame]
-  # visual_rotation_change, match_image, extra_info = get_angle_difference(j_features, i_features, new_cam_mat, i_frame, j_frame)
-  # # backwards, _, _ = get_angle_difference(features2, features1, new_cam_mat, frame1, frame2)
-  # # H1 = new_cam_mat @ global_rotation_to_visual(visual_rotation_change) @ np.linalg.inv(new_cam_mat)
-  # # H2 = new_cam_mat @ global_rotation_to_visual(backwards) @ np.linalg.inv(new_cam_mat)
-
-  # # visual_rotation_change = visual_rotation_change.T
-  # # v_zxy = R.from_matrix(visual_rotation_change).as_euler("ZXY", degrees=True)
-  # # visual_rotation_change = R.from_euler("ZXY", [-v_zxy[0], -v_zxy[1], -v_zxy[2]], degrees=True).as_matrix()
-  # # visual_rotation_change = np.linalg.inv(visual_rotation_change)  # We want i->j not j->i
-  # print(f"Extra info: {extra_info}")
-  # # intertial_rot = inertial_rotations[f1] @ np.linalg.inv(inertial_rotations[f2])
-  # print(f"Intertial start: {R.from_matrix(inertial_rotations[j]).as_euler('ZXY', degrees=True)}")
-  # print(f"Intertial end: {R.from_matrix(inertial_rotations[i]).as_euler('ZXY', degrees=True)}")
-  # # intertial_rot = inertial_rotations[f2] @ np.linalg.inv(inertial_rotations[f1])
-  # intertial_rot = np.linalg.inv(inertial_rotations[j]) @ inertial_rotations[i]
-  # difference = np.linalg.inv(visual_rotation_change) @ intertial_rot
-  # angle_diff = np.linalg.norm(R.from_matrix(difference).as_rotvec(degrees=True))
-  # print(f"Angle difference: {angle_diff:.2f} degrees")
-  # # print visual rotation change zxy
-  # visual_zxy = R.from_matrix(visual_rotation_change).as_euler("ZXY", degrees=True)
-  # print(f"Visual rotation change: {visual_zxy[0]:.2f}y {visual_zxy[1]:.2f}p {visual_zxy[2]:.2f}r")
-  # # print inertial rotation change zxy
-  # inertial_zxy = R.from_matrix(intertial_rot).as_euler("ZXY", degrees=True)
-  # print(f"Inertial rotation change: {inertial_zxy[0]:.2f}y {inertial_zxy[1]:.2f}p {inertial_zxy[2]:.2f}r")
-  # # Show the match image
-  # if match_image is not None:
-  #   cv.imshow("Match Image", match_image)
-  #   cv.waitKey(0)
-  #   cv.destroyAllWindows()
-
-  # Outputtting visual rotation (in xyz order)
+  # Output visual rotation (in xyz order)
   with open(args.output_angle_path, "w") as csvfile:
     for frame, visual_rotation in enumerate(visual_rotations):
       visual_zxy = R.from_matrix(visual_rotation).as_euler("ZXY", degrees=True)
@@ -176,6 +136,21 @@ def main(args):
           visual_zxy[0],
         )
       )
+
+  generate_rotation_histories_plot(
+    [
+      {"name": "Visual", "colour": "#42a7f5", "data": visual_rotations},
+      {"name": "Inertial", "colour": "#f07d0a", "data": inertial_rotations},
+    ],
+    interactive=True,
+  )
+
+  total_angle_difference = 0.0
+  for i in range(len(visual_rotations)):
+    difference = np.linalg.inv(visual_rotations[i]) @ inertial_rotations[i]
+    total_angle_difference += np.linalg.norm(R.from_matrix(difference).as_rotvec(degrees=True))
+  print(f"Average angle difference: {total_angle_difference / len(visual_rotations):.2f} degrees")
+
   cleanup()
 
 
@@ -231,7 +206,7 @@ def chain_rotations(
     visual_zxy = R.from_matrix(visual_rotations[i]).as_euler("ZXY", degrees=True)
     inertial_zxy = R.from_matrix(inertial_rotations[i]).as_euler("ZXY", degrees=True)
 
-    if args.output_debug_video is not None:
+    if output_debug_video is not None:
       angleText = ""
       angleText += f"Frame {i + 1}/{len(inertial_rotations)}"
       angleText += f"\nInertial:\n{inertial_zxy[0]:6.2f}y {inertial_zxy[1]:6.2f}p {inertial_zxy[2]:6.2f}r"
@@ -245,7 +220,6 @@ def chain_rotations(
           {"name": "Inertial", "colour": "#f07d0a", "data": inertial_rotations[: i + 1]},
         ],
         extra_text=angleText,
-        # extra_rot=visual_rotation_change,
       )
       (x, y) = (
         match_image.shape[1] - vector_plot.shape[1],
@@ -253,9 +227,8 @@ def chain_rotations(
       )
       match_image = helpers.paste_cv(match_image, vector_plot, x, y)
 
-      # image_debug = add_text_to_image(match_image, angleText)
       output_debug_video.write_frame_opencv(match_image)
-    if args.output_video is not None:
+    if output_video is not None:
       output_video.write_frame_opencv(image)
   return visual_rotations
 
@@ -274,25 +247,21 @@ def find_matches(sift_features, cameraMatrix, inertial_rotations):
   total_angle_diff = 0.0
   for i in range(len(sift_features)):
     for j in range(0, i):
-      # for j in range(max(i - 1, 0), i):
-      match_rot, _, extra_info = get_angle_difference(sift_features[i], sift_features[j], cameraMatrix)
-
-      # angle_diff =
+      match_rot, _, extra_info = get_angle_difference(sift_features[j], sift_features[i], cameraMatrix)
 
       intertial_rotation_change = np.linalg.inv(inertial_rotations[j]) @ inertial_rotations[i]
-      intertial_overlap_percent = get_homography_overlap_percent(intertial_rotation_change, cameraMatrix)
+      # intertial_overlap_percent = get_homography_overlap_percent(intertial_rotation_change, cameraMatrix)
       # frame_relations_picture[i * 2 + 1, j, 1] = intertial_overlap_percent * 255
       if match_rot is not None:
         matches.append((i, j, match_rot))
         frame_relations_picture[i * 2, j, 0] = 255
         frame_relations_picture[i * 2, j, 2] = (min(extra_info["inliers_dice"] * 4, 1)) * 255
 
-        intertial_rot = np.linalg.inv(inertial_rotations[i]) @ inertial_rotations[j]
-        difference = np.linalg.inv(match_rot) @ intertial_rot
+        difference = np.linalg.inv(match_rot) @ intertial_rotation_change
         angle_diff = np.linalg.norm(R.from_matrix(difference).as_rotvec(degrees=True))
-        frame_relations_picture[i * 2 + 1, j, 1] = min(angle_diff / 10, 1) * 255
+        frame_relations_picture[i * 2 + 1, j, 1] = min(angle_diff / 0.5, 1) * 255
         total_angle_diff += angle_diff
-        if angle_diff > 2:
+        if angle_diff > 0.2:
           print("Large angle difference detected:")
           print(f"  Frame {i} to {j}: {angle_diff:.2f} degrees")
           print(f"  Inliers: {extra_info['inliers']}, Dice: {extra_info['inliers_dice']:.2f}")
@@ -317,10 +286,9 @@ def solve_rotations(sift_features, cameraMatrix, inertial_rotations, args):
   # Now given 3 values of z, we reconstruct the rotation matrices R^{i} for each frame i.
   # These will be rotation matrices in a common coordinate frame, however not the world coordinate frame.
   # If we know the world coordinate frame of the first frame, we can rotate all matricies to the world coordinate frame.
-  # sift_features = sift_features[:50]  # Limit to first 50 frames for testing
   matches_cache_path = f"{args.video_path}.matches.data"
   matches = []
-  if os.path.exists(matches_cache_path) and False:
+  if os.path.exists(matches_cache_path):
     print(f"Loading matches from cache: {matches_cache_path}")
     matches = pickle.load(open(matches_cache_path, "rb"))
   else:
@@ -331,7 +299,7 @@ def solve_rotations(sift_features, cameraMatrix, inertial_rotations, args):
   l, m = len(matches), len(sift_features)  # noqa: E741
   A = torch.zeros((l * 3, m * 3), dtype=torch.float32)
   for idx, (i, j, match_rot) in enumerate(matches):
-    A[idx * 3 : idx * 3 + 3, i * 3 : i * 3 + 3] = -torch.from_numpy(np.linalg.inv(match_rot))
+    A[idx * 3 : idx * 3 + 3, i * 3 : i * 3 + 3] = -torch.from_numpy(match_rot)
     # A[idx * 3 : idx * 3 + 3, i * 3 : i * 3 + 3] = -torch.from_numpy(match_rot)
     A[idx * 3 : idx * 3 + 3, j * 3 : j * 3 + 3] = torch.eye(3, dtype=torch.float32)
   U, S, Vt = torch.linalg.svd(A)
@@ -351,19 +319,8 @@ def solve_rotations(sift_features, cameraMatrix, inertial_rotations, args):
 
     rotation = initial_correction @ rotation
     visual_rotations.append(rotation)
-    # zxy = R.from_matrix(rotation).as_euler("ZXY", degrees=True)
-    # print(f"Frame {i}: {zxy[0]:6.2f}y {zxy[1]:6.2f}p {zxy[2]:6.2f}r")
-  generate_rotation_histories_plot(
-    [
-      {"name": "Visual", "colour": "#42a7f5", "data": visual_rotations},
-      {"name": "Inertial", "colour": "#f07d0a", "data": inertial_rotations},
-    ],
-    interactive=True,
-  )
 
-  # Concatenate
-
-  return []
+  return visual_rotations
 
 
 def get_angle_difference(features1, features2, cameraMatrix, current_frame=None, previous_frame=None):
@@ -427,7 +384,7 @@ def get_angle_difference(features1, features2, cameraMatrix, current_frame=None,
   rotation = entire_transformation(orthonormalized_rotation)
   overlap_percent = get_homography_overlap_percent(rotation, cameraMatrix)
 
-  if overlap_percent < 0.1:
+  if overlap_percent < 0.15:
     return (None, None, None)
 
   match_image = None

@@ -33,7 +33,8 @@ def main(args):
   print(f"Vertical FOV: {vertical_fov:.4f} degrees, Horizontal FOV: {horizontal_fov:.4f} degrees")
   print(f"Output height: {out_h}, Output width: {out_w}")
 
-  output_video = VideoWriter(args.output_path, 20, (out_w, out_h), mbps=15, spherical_metadata=True)
+  input_fps = int(input_video.get(cv.CAP_PROP_FPS))
+  output_video = VideoWriter(args.output_path, input_fps, (out_w, out_h), mbps=15, spherical_metadata=True)
 
   device = helpers.get_device()
 

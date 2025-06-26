@@ -29,6 +29,30 @@ class VideoWriter:
     self.stream.height = size[1]
     self.stream.pix_fmt = 'yuv420p'
     self.stream.bit_rate = mbps * 1000000
+    self.ffmpeg_process = subprocess.Popen(
+      [
+        "ffmpeg",
+        "-y",
+        "-f",
+        "rawvideo",
+        "-pixel_format",
+        "bgr24",
+        "-video_size",
+        f"{size[0]}x{size[1]}",
+        "-framerate",
+        str(fps),
+        "-i",
+        "-",
+        # "-vf",
+        # "format=yuv420p",
+        "-c:v",
+        "h264_videotoolbox",
+        "-pix_fmt",
+        "yuv420p",
+        self.temp_path,
+      ],
+      stdin=subprocess.PIPE,
+    )
 
     self.frame_number = 0
     self.closed = False
@@ -61,9 +85,10 @@ class VideoWriter:
       raise ValueError("VideoWriter has already been closed.")
     frame_updated = helpers.BGRAToBGRAlphaBlack_torch(frame)
     frame_updated = frame_updated.byte().cpu().numpy()
-    frame_updated = av.VideoFrame.from_ndarray(frame_updated, format='bgr24')
-    for packet in self.stream.encode(frame_updated):
-      self.container.mux(packet)
+    # frame_updated = av.VideoFrame.from_ndarray(frame_updated, format='bgr24')
+    # for packet in self.stream.encode(frame_updated):
+    #   self.container.mux(packet)
+    self.ffmpeg_process.stdin.write(frame_updated.tobytes())
     self.frame_number += 1
     self.dirty = True
 
@@ -71,9 +96,10 @@ class VideoWriter:
   def write_frame_opencv(self, frame):
     if self.closed:
       raise ValueError("VideoWriter has already been closed.")
-    frame_updated = av.VideoFrame.from_ndarray(frame, format='bgr24')
-    for packet in self.stream.encode(frame_updated):
-      self.container.mux(packet)
+    # frame_updated = av.VideoFrame.from_ndarray(frame, format='bgr24')
+    # for packet in self.stream.encode(frame_updated):
+    #   self.container.mux(packet)
+    self.ffmpeg_process.stdin.write(frame.tobytes())
     self.frame_number += 1
     self.dirty = True
 
@@ -81,9 +107,12 @@ class VideoWriter:
     if self.closed:
       raise ValueError("VideoWriter has already been closed.")
 
-    for packet in self.stream.encode():
-      self.container.mux(packet)
-    self.container.close()
+    self.ffmpeg_process.stdin.close()
+    self.ffmpeg_process.wait()
+
+    # for packet in self.stream.encode():
+    #   self.container.mux(packet)
+    # self.container.close()
 
     # output_path = self.filename
     # if self.spherical_metadata:
