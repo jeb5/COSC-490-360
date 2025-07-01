@@ -1,9 +1,12 @@
+import csv
+import json
 import numpy as np
 import cv2 as cv
 import torch
 import torchvision
 import matplotlib.font_manager as fm
 import matplotlib.pyplot as plt
+import os
 
 
 # 100
@@ -135,22 +138,51 @@ def get_device():
     print("Warning: Using CPU for remapping, which may be slow")
   return device
 
+def rotations_from_csv(csv_path):
+  with open(csv_path, "r") as csvfile:
+    reader = csv.reader(csvfile)
+    # skip header
+    next(reader)
+    for row in reader:
+      frame_number = int(row[0])
+      pitch, roll, yaw = map(float, row[1:4])
+      yield (frame_number, (pitch, roll, yaw))
 
-# def blenderCyclesPolynomialFisheyeUndistort(size, K):
-#   k = [0, -0.439, -0.001, 0, 0]
-#   sensor = 100.0  # mm
-#   w, h = size
-#   hw, hh = w / 2, h / 2
-#   output = torch.zeros((h, w, 2), dtype=torch.float32)
-#   for x_raw in range(w):
-#     for y_raw in range(h):
-#       x = ((x_raw - hw) / hw) * sensor
-#       y = ((y_raw - hh) / hw) * sensor
-#       r = np.sqrt(x ** 2 + y ** 2)
-#       theta = k[0] + k[1] * r + k[2] * r ** 2 + k[3] * r ** 3 + k[4] * r ** 4
-#       phi = np.acos(x / r)
-#       out_x = np.cos(theta)
-#       out_y = np.sin(theta) - np.cos(phi)
-#       output[y_raw, x_raw, 0] = out_x * hw + hw
-#       output[y_raw, x_raw, 1] = out_y * hw + hh
-#   return output
+
+def get_file_path_pack_dir(dir_path, type):
+  postfixes = tuple(
+    {
+      "video": [".mp4", ".mkv"],
+      "debug_video": [".debug.mp4", ".debug.mkv"],
+      "inertial": [".inertial.csv"],
+      "visual": [".visual.csv"],
+      "features_cache": [".features.cache"],
+      "matches_cache": [".matches.cache"],
+      "camera_info": [".caminfo.json"],
+    }[type]
+  )
+  if not os.path.exists(dir_path):
+    os.makedirs(dir_path)
+  else:
+    files_present = os.listdir(dir_path)
+    for file in files_present:
+      if file.lower().endswith(postfixes):
+        return os.path.join(dir_path, file)
+  dir_name = os.path.basename(dir_path)
+  file_name = f"{dir_name}{postfixes[0]}"
+  file_path = os.path.join(dir_path, file_name)
+  return file_path
+
+
+def load_camera_info(camera_info_path):
+  if not os.path.exists(camera_info_path):
+    raise FileNotFoundError(f"Camera info file not found: {camera_info_path}")
+  with open(camera_info_path, "r") as f:
+    camera_info = json.load(f)
+    intrinsic_matrix = np.array(camera_info["intrinsic_matrix"], dtype=np.float32)
+    distortion_coefficients = (
+      np.array(camera_info["distortion_coefficients"], dtype=np.float32)
+      if len(camera_info["distortion_coefficients"]) > 0
+      else False
+    )
+  return intrinsic_matrix, distortion_coefficients

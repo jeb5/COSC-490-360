@@ -1,9 +1,9 @@
+import os
 import signal
 import sys
 import cv2 as cv
 import remap_360
 import helpers
-import csv
 from video_writer import VideoWriter
 import math
 import remap
@@ -15,9 +15,14 @@ import argparse
 @line_profiler.profile
 def main(args):
   torch.set_printoptions(precision=3, sci_mode=False)
-  input_video = cv.VideoCapture(args.video_path)
+  input_video_path = helpers.get_file_path_pack_dir(args.input_directory, "video")
+  input_rotation_path = helpers.get_file_path_pack_dir(args.input_directory, args.rotation_file_type)
+  output_video_path = (
+    args.output_path if args.output_path else os.join(args.input_directory, f"{os.basename(args.input_directory)}_360.mp4")
+  )
+  input_video = cv.VideoCapture(input_video_path)
 
-  cam_matrix, cam_distortion = helpers.GOPRO_CAMERA
+  cam_matrix, cam_distortion = helpers.load_camera_info(helpers.get_file_path_pack_dir(args.input_directory, "camera_info"))
 
   in_w, in_h = int(input_video.get(cv.CAP_PROP_FRAME_WIDTH)), int(input_video.get(cv.CAP_PROP_FRAME_HEIGHT))
   input_size = (in_w, in_h)
@@ -30,31 +35,34 @@ def main(args):
   out_h = int(in_h * (180 / vertical_fov) * args.scale)
   out_h = out_h // 2 * 2  # Ensure even height
   out_w = out_h * 2
-  print(f"Vertical FOV: {vertical_fov:.4f} degrees, Horizontal FOV: {horizontal_fov:.4f} degrees")
-  print(f"Output height: {out_h}, Output width: {out_w}")
+  print(f"Detected FOV: {horizontal_fov:.4f}˚x{vertical_fov:.4f}˚")
+  print(f"Output size: {out_w}x{out_h}")
 
   input_fps = int(input_video.get(cv.CAP_PROP_FPS))
-  output_video = VideoWriter(args.output_path, input_fps, (out_w, out_h), mbps=15, spherical_metadata=True)
+  output_video = VideoWriter(output_video_path, input_fps, (out_w, out_h), mbps=15, spherical_metadata=True)
 
   device = helpers.get_device()
 
-  newMat = cv.fisheye.estimateNewCameraMatrixForUndistortRectify(cam_matrix, cam_distortion, input_size, None, None, 1, input_size, 1)
-  print(f"New camera matrix: {newMat}")
-  newMat[0][2] = in_w / 2
-  newMat[1][2] = in_h / 2
-  newFocalLength = newMat[0][0]
-  m1, m2 = cv.fisheye.initUndistortRectifyMap(cam_matrix, cam_distortion, None, newMat, input_size, cv.CV_32FC1)
-  m1, m2 = torch.from_numpy(m1).to(device), torch.from_numpy(m2).to(device)
-  undistortMap = torch.stack((m1, m2), dim=-1)
-  undistortMap = remap.absoluteToRelative(undistortMap, input_size)
+  ideal_cam_mat = (
+    cv.fisheye.estimateNewCameraMatrixForUndistortRectify(cam_matrix, cam_distortion, input_size, None, None, 1, input_size, 1)
+    if len(cam_distortion) > 0
+    else cam_matrix.copy()
+  )
+  ideal_cam_mat[0][2] = in_w / 2
+  ideal_cam_mat[1][2] = in_h / 2
+  ideal_focal_length = ideal_cam_mat[0][0]
+  undistort_map = None
+  if len(cam_distortion) > 0:
+    m1, m2 = cv.fisheye.initUndistortRectifyMap(cam_matrix, cam_distortion, None, ideal_cam_mat, input_size, cv.CV_32FC1)
+    m1, m2 = torch.from_numpy(m1).to(device), torch.from_numpy(m2).to(device)
+    undistort_map = remap.absoluteToRelative(torch.stack((m1, m2), dim=-1), input_size)
 
   output_vectors = remap_360.getFrameOutputVectors(out_w, out_h, device)
   background = None
 
   def cleanup():
     input_video.release()
-    if args.output_path is not None:
-      output_video.save_video()
+    output_video.save_video()
     print("Done.")
 
   def interuppt_handler(signum, frame):
@@ -63,43 +71,33 @@ def main(args):
 
   signal.signal(signal.SIGINT, interuppt_handler)
 
-  with open(args.rotation_path, 'r') as csvfile:
-    reader = csv.reader(csvfile)
-    for row in reader:
-      frame, pitch, roll, yaw = map(float, row)
-      # if frame > 100:
-      #   break
-      # yaw += math.pi / 2
-      ###
-      radMult = torch.pi / 180
-      pitch, roll, yaw = pitch * radMult, -roll * radMult, yaw * radMult
-      ###
-      degMult = 180 / torch.pi
-      pitchdeg, rolldeg, yawdeg = pitch * degMult, roll * degMult, yaw * degMult
-      print(f"Frame: {frame}, Pitch: {pitchdeg:.2f}, Roll: {rolldeg:.2f}, Yaw: {yawdeg:.2f}")
+  rotations = helpers.rotations_from_csv(input_rotation_path)
 
-      input_video.set(cv.CAP_PROP_POS_FRAMES, frame)
-      ret, image1 = input_video.read()
-      image1 = cv.cvtColor(image1, cv.COLOR_BGR2BGRA)
-      image1 = torch.from_numpy(image1).to(device).float()
-      image1 = remap.torch_remap(undistortMap, image1)
+  for frame, (pitch, roll, yaw) in rotations:
+    print(f"Frame: {frame}, Pitch: {pitch:.2f}˚, Roll: {roll:.2f}˚, Yaw: {yaw:.2f}˚")
 
-      map360 = remap_360.remapping360_torch(out_w, out_h, in_w, in_h, yaw, pitch, roll, newFocalLength, output_vectors)
-      dst = remap.torch_remap(map360, image1)
+    input_video.set(cv.CAP_PROP_POS_FRAMES, frame)
+    ret, image = input_video.read()
+    image = cv.cvtColor(image, cv.COLOR_BGR2BGRA)
+    image = torch.from_numpy(image).to(device).float()
+    image = remap.torch_remap(undistort_map, image) if undistort_map is not None else image
 
-      if background is None:
-        background = dst.clone()
-      else:
-        background = helpers.add_transparent_image_torch(background, dst)
+    map360 = remap_360.remapping360_torch(in_w, in_h, yaw, pitch, roll, ideal_focal_length, output_vectors)
+    dst = remap.torch_remap(map360, image)
 
-      output_video.write_frame(background)
+    if background is None:
+      background = dst.clone()
+    else:
+      background = helpers.add_transparent_image_torch(background, dst)
+
+    output_video.write_frame(background)
   cleanup()
 
 if __name__ == "__main__":
   parser = argparse.ArgumentParser(description="Remap rotating fotoage to 360 video")
-  parser.add_argument("video_path", type=str, help="Path to the input video file.")
-  parser.add_argument("rotation_path", type=str, help="Path to the input rotation file.")
-  parser.add_argument("output_path", type=str, help="Path to the output video file.")
+  parser.add_argument("input_directory", type=str, help="Path to the input video file.")
+  parser.add_argument("rotation_file_type", type=str, choices=["inertial", "visual"], help="Type of rotation data file to use.")
+  parser.add_argument("--output_path", type=str, help="Path to the output video file.")
   parser.add_argument("--scale", type=float, default=1.0, help="Scale factor for output video size.")
   args = parser.parse_args()
   with torch.no_grad():

@@ -1,5 +1,3 @@
-import os
-import pickle
 import numpy as np
 import cv2 as cv
 import argparse
@@ -10,11 +8,10 @@ from angle_estimation_helpers import (
   generate_rotation_histories_plot,
   get_features,
   get_homography_overlap_percent,
-  global_rotation_to_visual,
   load_features,
   overlay_homography,
-  visual_rotation_to_global,
-  inertials_from_csv,
+  load_matches,
+  cache_matches,
 )
 import helpers
 import progressbar as pb
@@ -25,7 +22,13 @@ from scipy.spatial.transform import Rotation as R
 
 
 def main(args):
-  input_video = cv.VideoCapture(args.video_path)
+  input_video_path = helpers.get_file_path_pack_dir(args.directory, "video")
+  input_inertial_path = helpers.get_file_path_pack_dir(args.directory, "inertial")
+  features_cache_path = helpers.get_file_path_pack_dir(args.directory, "features_cache")
+
+  cam_matrix, cam_distortion = helpers.load_camera_info(helpers.get_file_path_pack_dir(args.directory, "camera_info"))
+
+  input_video = cv.VideoCapture(input_video_path)
   if not input_video.isOpened():
     print("Error opening video file")
     return
@@ -35,39 +38,31 @@ def main(args):
     int(input_video.get(cv.CAP_PROP_FRAME_HEIGHT)),
   )
   input_framerate = int(input_video.get(cv.CAP_PROP_FPS))
-  (start_frame, end_frame) = (
-    args.start_frame,
-    (args.end_frame if args.end_frame >= 0 else int(input_video.get(cv.CAP_PROP_FRAME_COUNT) - 1)),
-  )
+  start_frame, end_frame = (0, int(input_video.get(cv.CAP_PROP_FRAME_COUNT) - 1))
+  start_frame = 620
+  print("end_frame", end_frame)
 
-  cam_matrix, cam_distortion = helpers.GOPRO_CAMERA if args.gopro else helpers.BLENDER_CAMERA
   new_cam_mat = (
     cv.fisheye.estimateNewCameraMatrixForUndistortRectify(cam_matrix, cam_distortion, input_size, None, None, 1, input_size, 1)
-    if args.gopro
+    if len(cam_distortion) > 0
     else cam_matrix
   )
   m1, m2 = (
     cv.fisheye.initUndistortRectifyMap(cam_matrix, cam_distortion, None, new_cam_mat, input_size, cv.CV_32FC1)
-    if args.gopro
+    if len(cam_distortion) > 0
     else (None, None)
   )
 
-  if args.output_video is not None:
-    output_video = VideoWriter(args.output_video, input_framerate, input_size)
-  if args.output_debug_video is not None:
-    output_debug_video = VideoWriter(args.output_debug_video, input_framerate, input_size)
-    # IF output_debug_video was disabled, we *could* save time by not undistorting the image, only the feature locations
+  output_debug_video_path = helpers.get_file_path_pack_dir(args.directory, "debug_video") if args.output_debug_video else None
+  output_debug_video = VideoWriter(output_debug_video_path, input_framerate, input_size) if args.output_debug_video else None
+  # IF output_debug_video was disabled, we *could* save time by not undistorting the image, only the feature locations
 
   def cleanup():
     input_video.release()
-    if args.output_video is not None:
-      if output_debug_video.did_write():
-        output_video.save_video()
-        print(f"Output video saved to {args.output_video}")
-    if args.output_debug_video is not None:
+    if output_debug_video is not None:
       if output_debug_video.did_write():
         output_debug_video.save_video()
-        print(f"Debug video saved to {args.output_debug_video}")
+        print(f"Debug video saved to {output_debug_video_path}")
     print("Done.")
 
   def interupt_handler(signum, frame):
@@ -83,29 +78,26 @@ def main(args):
 
   inertial_rotations = [
     R.from_euler("ZXY", [xyz[2], xyz[0], xyz[1]], degrees=True).as_matrix()
-    for i, xyz in bar(inertials_from_csv(args, start_frame, end_frame))
+    for frame, xyz in helpers.rotations_from_csv(input_inertial_path)
   ]
 
-  features_cache_path = f"{args.video_path}.features.data"
-  frame_features = load_features(features_cache_path)
-  if frame_features is not None:
-    print(f"Loaded features from cache: {features_cache_path}")
-  else:
-    frame_features = []
+  frame_features = load_features(features_cache_path) if args.use_features_cache else []
+  if len(frame_features) == 0:
     bar = pb.ProgressBar(
       max_value=len(inertial_rotations),
       widgets=["Finding SIFT features: ", pb.Percentage(), " ", pb.GranularBar()],
     )
     for i in bar(range(end_frame - start_frame + 1)):
       frame = start_frame + i
+      print(f"\rProcessing frame {frame}/{end_frame}", end="")
       input_video.set(cv.CAP_PROP_POS_FRAMES, frame)
       ret, image = input_video.read()
-      image_undistorted = cv.remap(image, m1, m2, cv.INTER_LINEAR) if args.gopro else image
+      image_undistorted = image if m1 is None else cv.remap(image, m1, m2, cv.INTER_LINEAR)
       frame_features.append(get_features(image_undistorted))
     cache_features(frame_features, features_cache_path)
 
   visual_rotations = []
-  if False:
+  if args.naive_chaining:
     visual_rotations = chain_rotations(
       frame_features,
       inertial_rotations,
@@ -113,11 +105,7 @@ def main(args):
       input_video,
       start_frame,
       end_frame,
-      args,
-      # output_video if args.output_video is not None else None,
-      # output_debug_video if args.output_debug_video is not None else None,
-      None,
-      None,
+      output_debug_video,
       m1,
       m2,
     )
@@ -161,8 +149,6 @@ def chain_rotations(
   input_video,
   start_frame,
   end_frame,
-  args,
-  output_video,
   output_debug_video,
   m1,
   m2,
@@ -189,7 +175,7 @@ def chain_rotations(
     ret, image = input_video.read()
     if not ret:
       raise Exception(f"Failed to read frame {frame} from video.")
-    image_undistorted = cv.remap(image, m1, m2, cv.INTER_LINEAR) if args.gopro else image
+    image_undistorted = cv.remap(image, m1, m2, cv.INTER_LINEAR) if m1 is not None else image
 
     visual_rotation_change, match_image = None, None
     if i == 0:
@@ -228,8 +214,6 @@ def chain_rotations(
       match_image = helpers.paste_cv(match_image, vector_plot, x, y)
 
       output_debug_video.write_frame_opencv(match_image)
-    if output_video is not None:
-      output_video.write_frame_opencv(image)
   return visual_rotations
 
 
@@ -286,15 +270,11 @@ def solve_rotations(sift_features, cameraMatrix, inertial_rotations, args):
   # Now given 3 values of z, we reconstruct the rotation matrices R^{i} for each frame i.
   # These will be rotation matrices in a common coordinate frame, however not the world coordinate frame.
   # If we know the world coordinate frame of the first frame, we can rotate all matricies to the world coordinate frame.
-  matches_cache_path = f"{args.video_path}.matches.data"
-  matches = []
-  if os.path.exists(matches_cache_path):
-    print(f"Loading matches from cache: {matches_cache_path}")
-    matches = pickle.load(open(matches_cache_path, "rb"))
-  else:
-    print("Finding matches...")
+  matches_cache_path = helpers.get_file_path_pack_dir(args.input, "matches_cache")
+  matches = load_matches(matches_cache_path) if args.use_matches_cache else []
+  if len(matches) == 0:
     matches = find_matches(sift_features, cameraMatrix, inertial_rotations)
-    pickle.dump(matches, open(matches_cache_path, "wb"))
+    cache_matches(matches, matches_cache_path)
 
   l, m = len(matches), len(sift_features)  # noqa: E741
   A = torch.zeros((l * 3, m * 3), dtype=torch.float32)
@@ -439,13 +419,15 @@ def get_angle_difference(features1, features2, cameraMatrix, current_frame=None,
 
 if __name__ == "__main__":
   parser = argparse.ArgumentParser(description="Estimate angles from gyro data and video.")
-  parser.add_argument("video_path", type=str, help="Path to the input video file.")
-  parser.add_argument("gyro_csv_path", type=str, help="Path to the gyro CSV file.")
-  parser.add_argument("output_angle_path", type=str, help="Path to the output angle CSV file.")
-  parser.add_argument("--output_video", type=str, help="Path to the output video file.")
-  parser.add_argument("--output_debug_video", type=str, help="Path to the debug output video file.")
-  parser.add_argument("--start_frame", type=int, default=0, help="Start frame for processing.")
-  parser.add_argument("--end_frame", type=int, default=-1, help="End frame for processing.")
-  parser.add_argument("--gopro", action="store_true", help="Use GoPro camera settings.")
+  parser.add_argument("directory", type=str, help="Path to the directory containing the video and inertial data.")
+  parser.add_argument(
+    "--output_debug_video",
+    action="store_true",
+    help="Output a video for debugging purposes with visualisation of matches and angle estimation.",
+  )
+  parser.add_argument("--use_features_cache", action="store_true")
+  parser.add_argument("--use_matches_cache", action="store_true")
+  parser.add_argument("--naive_chaining", action="store_true")
+
   args = parser.parse_args()
   main(args)

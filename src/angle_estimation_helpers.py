@@ -267,33 +267,6 @@ def figure_to_cv_image(fig):
   return image
 
 
-def inertials_from_csv(args, first_frame, last_frame):
-  csv_path = args.gyro_csv_path
-  gopro = args.gopro
-  current_frame = first_frame
-  frame_with_xyz = None
-  with open(csv_path, "r") as csvfile:
-    reader = csv.reader(csvfile)
-    # skip header
-    next(reader)
-    for i, row in enumerate(reader):
-      frame_number = int(row[0])
-      if frame_number < first_frame:
-        continue
-      if frame_number > last_frame:
-        break
-      if frame_number > current_frame:
-        if frame_number != current_frame + 1:
-          raise ValueError(f"Frame numbers are not continuous: {current_frame} -> {frame_number}")
-        current_frame = frame_number
-        yield frame_with_xyz
-      frame_with_xyz = (
-        (current_frame, (float(row[5]) - 90, float(row[6]), float(row[7])))
-        if gopro
-        else (current_frame, (float(row[1]), float(row[2]), float(row[3])))
-      )
-    if current_frame == last_frame:
-      yield frame_with_xyz
 
 
 def serialize_keypoints(kp):
@@ -319,16 +292,36 @@ def deserialize_keypoints(serialized_kp):
 
 
 def cache_features(features, cache_path):
+  print(f"Caching features to: {cache_path}")
   with open(cache_path, "wb") as f:
     serialized_frame_features = [(serialize_keypoints(kp), des.tolist()) for (kp, des) in features]
     pickle.dump(serialized_frame_features, f)
 
 
 def load_features(cache_path):
+  print(f"Loading features from cache: {cache_path}")
   if os.path.exists(cache_path):
     with open(cache_path, "rb") as f:
       frame_features_serialized = pickle.load(f)
       frame_features = [(deserialize_keypoints(kp), np.asarray(des, dtype=np.float32)) for (kp, des) in frame_features_serialized]
       return frame_features
   else:
-    return None
+    print("Cache miss")
+    return []
+
+
+def load_matches(cache_path):
+  print(f"Loading matches from cache: {cache_path}")
+  if os.path.exists(cache_path):
+    with open(cache_path, "rb") as f:
+      matches = pickle.load(f)
+      return matches
+  else:
+    print("Cache miss")
+    return []
+
+
+def cache_matches(matches, cache_path):
+  print(f"Caching matches to: {cache_path}")
+  with open(cache_path, "wb") as f:
+    pickle.dump(matches, f)
