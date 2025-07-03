@@ -24,6 +24,7 @@ from scipy.spatial.transform import Rotation as R
 def main(args):
   input_video_path = helpers.get_file_path_pack_dir(args.directory, "video")
   input_inertial_path = helpers.get_file_path_pack_dir(args.directory, "inertial")
+  output_visual_path = helpers.get_file_path_pack_dir(args.directory, "visual")
   features_cache_path = helpers.get_file_path_pack_dir(args.directory, "features_cache")
 
   cam_matrix, cam_distortion = helpers.load_camera_info(helpers.get_file_path_pack_dir(args.directory, "camera_info"))
@@ -39,8 +40,6 @@ def main(args):
   )
   input_framerate = int(input_video.get(cv.CAP_PROP_FPS))
   start_frame, end_frame = (0, int(input_video.get(cv.CAP_PROP_FRAME_COUNT) - 1))
-  start_frame = 620
-  print("end_frame", end_frame)
 
   new_cam_mat = (
     cv.fisheye.estimateNewCameraMatrixForUndistortRectify(cam_matrix, cam_distortion, input_size, None, None, 1, input_size, 1)
@@ -70,76 +69,77 @@ def main(args):
     sys.exit(0)
 
   signal.signal(signal.SIGINT, interupt_handler)
-
-  bar = pb.ProgressBar(
-    max_value=end_frame - start_frame + 1,
-    widgets=["Reading inertial data: ", pb.GranularBar()],
-  )
-
-  inertial_rotations = [
-    R.from_euler("ZXY", [xyz[2], xyz[0], xyz[1]], degrees=True).as_matrix()
-    for frame, xyz in helpers.rotations_from_csv(input_inertial_path)
-  ]
-
-  frame_features = load_features(features_cache_path) if args.use_features_cache else []
-  if len(frame_features) == 0:
+  try:
     bar = pb.ProgressBar(
-      max_value=len(inertial_rotations),
-      widgets=["Finding SIFT features: ", pb.Percentage(), " ", pb.GranularBar()],
+      max_value=(end_frame - start_frame + 1),
+      widgets=["Reading inertial data: ", pb.GranularBar()],
     )
-    for i in bar(range(end_frame - start_frame + 1)):
-      frame = start_frame + i
-      print(f"\rProcessing frame {frame}/{end_frame}", end="")
-      input_video.set(cv.CAP_PROP_POS_FRAMES, frame)
-      ret, image = input_video.read()
-      image_undistorted = image if m1 is None else cv.remap(image, m1, m2, cv.INTER_LINEAR)
-      frame_features.append(get_features(image_undistorted))
-    cache_features(frame_features, features_cache_path)
 
-  visual_rotations = []
-  if args.naive_chaining:
-    visual_rotations = chain_rotations(
-      frame_features,
-      inertial_rotations,
-      new_cam_mat,
-      input_video,
-      start_frame,
-      end_frame,
-      output_debug_video,
-      m1,
-      m2,
-    )
-  else:
-    visual_rotations = solve_rotations(frame_features, new_cam_mat, inertial_rotations, args)
+    inertial_rotations = [
+      R.from_euler("ZXY", [xyz[2], xyz[0], xyz[1]], degrees=True).as_matrix()
+      for frame, xyz in helpers.rotations_from_csv(input_inertial_path)
+    ]
+    inertial_rotations = inertial_rotations[start_frame : end_frame + 1]
 
-  # Output visual rotation (in xyz order)
-  with open(args.output_angle_path, "w") as csvfile:
-    for frame, visual_rotation in enumerate(visual_rotations):
-      visual_zxy = R.from_matrix(visual_rotation).as_euler("ZXY", degrees=True)
-      csvfile.write(
-        "{},{},{},{}\n".format(
-          frame,
-          visual_zxy[1],
-          visual_zxy[2],
-          visual_zxy[0],
-        )
+    frame_features = load_features(features_cache_path) if args.use_features_cache else []
+    if len(frame_features) == 0:
+      bar = pb.ProgressBar(
+        max_value=(end_frame - start_frame + 1),
+        widgets=["Finding SIFT features: ", pb.Percentage(), " ", pb.GranularBar()],
       )
+      for i in bar(range(end_frame - start_frame + 1)):
+        frame = start_frame + i
+        input_video.set(cv.CAP_PROP_POS_FRAMES, frame)
+        ret, image = input_video.read()
+        image_undistorted = image if m1 is None else cv.remap(image, m1, m2, cv.INTER_LINEAR)
+        frame_features.append(get_features(image_undistorted))
+      cache_features(frame_features, features_cache_path)
 
-  generate_rotation_histories_plot(
-    [
-      {"name": "Visual", "colour": "#42a7f5", "data": visual_rotations},
-      {"name": "Inertial", "colour": "#f07d0a", "data": inertial_rotations},
-    ],
-    interactive=True,
-  )
+    visual_rotations = []
+    if args.naive_chaining:
+      visual_rotations = chain_rotations(
+        frame_features,
+        inertial_rotations,
+        new_cam_mat,
+        input_video,
+        start_frame,
+        end_frame,
+        output_debug_video,
+        m1,
+        m2,
+      )
+    else:
+      visual_rotations = solve_rotations(frame_features, new_cam_mat, inertial_rotations, args)
 
-  total_angle_difference = 0.0
-  for i in range(len(visual_rotations)):
-    difference = np.linalg.inv(visual_rotations[i]) @ inertial_rotations[i]
-    total_angle_difference += np.linalg.norm(R.from_matrix(difference).as_rotvec(degrees=True))
-  print(f"Average angle difference: {total_angle_difference / len(visual_rotations):.2f} degrees")
+    # Output visual rotation (in xyz order)
+    with open(output_visual_path, "w") as csvfile:
+      csvfile.write("frame,pitch,roll,yaw\n")
+      for frame, visual_rotation in enumerate(visual_rotations):
+        visual_zxy = R.from_matrix(visual_rotation).as_euler("ZXY", degrees=True)
+        csvfile.write(
+          "{},{},{},{}\n".format(
+            frame,
+            visual_zxy[1],
+            visual_zxy[2],
+            visual_zxy[0],
+          )
+        )
 
-  cleanup()
+    generate_rotation_histories_plot(
+      [
+        {"name": "Visual", "colour": "#42a7f5", "data": visual_rotations},
+        {"name": "Inertial", "colour": "#f07d0a", "data": inertial_rotations},
+      ],
+      interactive=True,
+    )
+
+    total_angle_difference = 0.0
+    for i in range(len(visual_rotations)):
+      difference = np.linalg.inv(visual_rotations[i]) @ inertial_rotations[i]
+      total_angle_difference += np.linalg.norm(R.from_matrix(difference).as_rotvec(degrees=True))
+    print(f"Average angle difference: {total_angle_difference / len(visual_rotations):.2f} degrees")
+  finally:
+    cleanup()
 
 
 def chain_rotations(
@@ -156,7 +156,7 @@ def chain_rotations(
   visual_rotations = []
 
   bar = pb.ProgressBar(
-    max_value=len(inertial_rotations),
+    max_value=(end_frame - start_frame + 1),
     widgets=[
       "Writing frame ",
       pb.Counter(format="%(value)d"),
@@ -168,6 +168,7 @@ def chain_rotations(
       pb.ETA(),
     ],
     redirect_stdout=True,
+    redirect_stderr=True,
   )
   for i in bar(range(end_frame - start_frame + 1)):
     frame = start_frame + i
@@ -186,7 +187,8 @@ def chain_rotations(
         frame_features[i - 1], frame_features[i], new_cam_mat, image_undistorted
       )
       if visual_rotation_change is None:
-        raise Exception(f"Homography estimation failed at frame {frame}")
+        print(f"Homography estimation failed at frame {frame}")
+        return visual_rotations
       visual_rotations.append(visual_rotations[i - 1] @ visual_rotation_change)
 
     visual_zxy = R.from_matrix(visual_rotations[i]).as_euler("ZXY", degrees=True)

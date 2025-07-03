@@ -18,7 +18,9 @@ def main(args):
   input_video_path = helpers.get_file_path_pack_dir(args.input_directory, "video")
   input_rotation_path = helpers.get_file_path_pack_dir(args.input_directory, args.rotation_file_type)
   output_video_path = (
-    args.output_path if args.output_path else os.join(args.input_directory, f"{os.basename(args.input_directory)}_360.mp4")
+    args.output_path
+    if args.output_path
+    else os.path.join(args.input_directory, f"{os.path.basename(args.input_directory)}_360.mp4")
   )
   input_video = cv.VideoCapture(input_video_path)
 

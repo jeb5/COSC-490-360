@@ -8,6 +8,7 @@ import helpers
 import spatialmedia
 import spatialmedia.metadata_utils
 import line_profiler
+import threading
 
 
 class VideoWriter:
@@ -20,10 +21,13 @@ class VideoWriter:
     self.temp_dir = tempfile.mkdtemp(suffix="video_writer_temp")
     extension = filename.split(".")[-1]
     self.temp_path = f"{self.temp_dir}/temp.{extension}"
+
     self.ffmpeg_process = subprocess.Popen(
       [
         "ffmpeg",
         "-hide_banner",
+        "-loglevel",
+        "error",
         "-y",
         "-f",
         "rawvideo",
@@ -44,7 +48,19 @@ class VideoWriter:
         self.temp_path,
       ],
       stdin=subprocess.PIPE,
+      stderr=subprocess.PIPE,
+      stdout=subprocess.PIPE,
     )
+
+    def stream_output(stream, write_func):
+      while True:
+        line = stream.readline()
+        if not line:
+          break
+        write_func(line.decode("utf-8"), end="")
+
+    threading.Thread(target=stream_output, args=(self.ffmpeg_process.stdout, print), daemon=True).start()
+    threading.Thread(target=stream_output, args=(self.ffmpeg_process.stderr, print), daemon=True).start()
 
     self.frame_number = 0
     self.closed = False

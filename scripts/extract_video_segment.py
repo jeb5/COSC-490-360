@@ -52,6 +52,8 @@ def trim_video(input_path, output_path, start_time, end_time):
   cmd = [
     "ffmpeg",
     "-hide_banner",
+    "-fflags",
+    "+genpts+igndts",
     "-y",
     "-ss",
     f"{start_time}",

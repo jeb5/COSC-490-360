@@ -150,24 +150,27 @@ def rotations_from_csv(csv_path):
 
 
 def get_file_path_pack_dir(dir_path, type):
-  postfixes = tuple(
-    {
-      "video": [".mp4", ".mkv"],
-      "debug_video": [".debug.mp4", ".debug.mkv"],
-      "inertial": [".inertial.csv"],
-      "visual": [".visual.csv"],
-      "features_cache": [".features.cache"],
-      "matches_cache": [".matches.cache"],
-      "camera_info": [".caminfo.json"],
-    }[type]
-  )
+  possible_postfixes = {
+    "video": [".mp4", ".mkv"],
+    "debug_video": [".debug.mp4", ".debug.mkv"],
+    "inertial": [".inertial.csv"],
+    "visual": [".visual.csv"],
+    "features_cache": [".features.cache"],
+    "matches_cache": [".matches.cache"],
+    "camera_info": [".caminfo.json"],
+  }
+  postfixes = tuple(possible_postfixes[type])
+  # All the postfixes that are not of type
+
   if not os.path.exists(dir_path):
     os.makedirs(dir_path)
   else:
     files_present = os.listdir(dir_path)
     for file in files_present:
       if file.lower().endswith(postfixes):
-        return os.path.join(dir_path, file)
+        # So that videos don't match debug videos (Rather than come up with a more robust algorithm, this is my quick patch)
+        if type != "video" or not file.lower().endswith(tuple(possible_postfixes["debug_video"])):
+          return os.path.join(dir_path, file)
   dir_name = os.path.basename(dir_path)
   file_name = f"{dir_name}{postfixes[0]}"
   file_path = os.path.join(dir_path, file_name)
