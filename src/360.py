@@ -60,7 +60,7 @@ def main(args):
     undistort_map = remap.absoluteToRelative(torch.stack((m1, m2), dim=-1), input_size)
 
   output_vectors = remap_360.getFrameOutputVectors(out_w, out_h, device)
-  background = None
+  background = torch.zeros((out_h, out_w, 4), dtype=torch.float32, device=device)
 
   def cleanup():
     input_video.release()
@@ -73,10 +73,15 @@ def main(args):
 
   signal.signal(signal.SIGINT, interuppt_handler)
 
+  # generator:
   rotations = helpers.rotations_from_csv(input_rotation_path)
+  next_rotation = next(rotations, None)
 
-  for frame, (pitch, roll, yaw) in rotations:
-    print(f"Frame: {frame}, Pitch: {pitch:.2f}˚, Roll: {roll:.2f}˚, Yaw: {yaw:.2f}˚")
+  for frame in range(int(input_video.get(cv.CAP_PROP_FRAME_COUNT))):
+    rotation = None
+    if next_rotation is not None and next_rotation[0] == frame:
+      rotation = next_rotation[1]
+      next_rotation = next(rotations, None)
 
     input_video.set(cv.CAP_PROP_POS_FRAMES, frame)
     ret, image = input_video.read()
@@ -84,12 +89,11 @@ def main(args):
     image = torch.from_numpy(image).to(device).float()
     image = remap.torch_remap(undistort_map, image) if undistort_map is not None else image
 
-    map360 = remap_360.remapping360_torch(in_w, in_h, yaw, pitch, roll, ideal_focal_length, output_vectors)
-    dst = remap.torch_remap(map360, image)
-
-    if background is None:
-      background = dst.clone()
-    else:
+    if rotation is not None:
+      pitch, roll, yaw = rotation
+      print(f"Frame: {frame}, Pitch: {pitch:.2f}˚, Roll: {roll:.2f}˚, Yaw: {yaw:.2f}˚")
+      map360 = remap_360.remapping360_torch(in_w, in_h, yaw, pitch, roll, ideal_focal_length, output_vectors)
+      dst = remap.torch_remap(map360, image)
       background = helpers.add_transparent_image_torch(background, dst)
 
     output_video.write_frame(background)

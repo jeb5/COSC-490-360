@@ -201,7 +201,18 @@ def generate_rotation_histories_plot(rotation_histories, extra_text=None, extra_
     name = rotation_history["name"]
     colour = rotation_history["colour"]
     rotations = rotation_history["data"]
-    vectors = [rotation @ np.array([0, 1, 0]) for rotation in rotations]
+    # Get mask to filter out None values
+    mask = [rot is not None for rot in rotations]
+    mask = np.array(mask)
+    rotations = [rot if rot is not None else np.eye(3) for rot in rotations]
+    rotations = np.array(rotations)
+    # Python version (old)
+    # vectors = [rotation @ np.array([0, 1, 0]) for rotation in rotations]
+    # Numpy version (new)
+    vectors = rotations @ np.array([0, 1, 0])
+    # Apply mask, setting None values to NaN
+    vectors = np.where(mask[:, None], vectors, np.nan)
+
     vector_history = np.array(vectors)
     xs, ys, zs = vector_history[:, 0], vector_history[:, 1], vector_history[:, 2]
     ax_main.quiver(

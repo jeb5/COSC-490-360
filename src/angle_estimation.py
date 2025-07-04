@@ -115,6 +115,8 @@ def main(args):
     with open(output_visual_path, "w") as csvfile:
       csvfile.write("frame,pitch,roll,yaw\n")
       for frame, visual_rotation in enumerate(visual_rotations):
+        if visual_rotation is None:
+          continue
         visual_zxy = R.from_matrix(visual_rotation).as_euler("ZXY", degrees=True)
         csvfile.write(
           "{},{},{},{}\n".format(
@@ -133,8 +135,11 @@ def main(args):
       interactive=True,
     )
 
-    total_angle_difference = 0.0
+    total_angle_difference, count = 0.0, 0.0
     for i in range(len(visual_rotations)):
+      if visual_rotations[i] is None or inertial_rotations[i] is None:
+        continue
+      count += 1
       difference = np.linalg.inv(visual_rotations[i]) @ inertial_rotations[i]
       total_angle_difference += np.linalg.norm(R.from_matrix(difference).as_rotvec(degrees=True))
     print(f"Average angle difference: {total_angle_difference / len(visual_rotations):.2f} degrees")
@@ -188,18 +193,22 @@ def chain_rotations(
       )
       if visual_rotation_change is None:
         print(f"Homography estimation failed at frame {frame}")
-        return visual_rotations
-      visual_rotations.append(visual_rotations[i - 1] @ visual_rotation_change)
+        visual_rotations.append(None)
+      elif visual_rotations[i - 1] is None:
+        # Use inertial rotation to continue the chain
+        visual_rotations.append(inertial_rotations[i - 1] @ visual_rotation_change)
+      else:
+        visual_rotations.append(visual_rotations[i - 1] @ visual_rotation_change)
 
-    visual_zxy = R.from_matrix(visual_rotations[i]).as_euler("ZXY", degrees=True)
+    visual_zxy = R.from_matrix(visual_rotations[i]).as_euler("ZXY", degrees=True) if visual_rotations[i] is not None else None
     inertial_zxy = R.from_matrix(inertial_rotations[i]).as_euler("ZXY", degrees=True)
 
     if output_debug_video is not None:
       angleText = ""
       angleText += f"Frame {i + 1}/{len(inertial_rotations)}"
       angleText += f"\nInertial:\n{inertial_zxy[0]:6.2f}y {inertial_zxy[1]:6.2f}p {inertial_zxy[2]:6.2f}r"
-      angleText += f"\nVisual:\n{visual_zxy[0]:6.2f}y {visual_zxy[1]:6.2f}p {visual_zxy[2]:6.2f}r"
       if visual_rotation_change is not None:
+        angleText += f"\nVisual:\n{visual_zxy[0]:6.2f}y {visual_zxy[1]:6.2f}p {visual_zxy[2]:6.2f}r"
         visual_zxy_change = R.from_matrix(visual_rotation_change).as_euler("ZXY", degrees=True)
         angleText += f"\nChange:\n{visual_zxy_change[0]:6.2f}y {visual_zxy_change[1]:6.2f}p {visual_zxy_change[2]:6.2f}r"
       vector_plot = generate_rotation_histories_plot(
@@ -209,6 +218,8 @@ def chain_rotations(
         ],
         extra_text=angleText,
       )
+      if match_image is None:
+        match_image = image_undistorted.copy()
       (x, y) = (
         match_image.shape[1] - vector_plot.shape[1],
         match_image.shape[0] - vector_plot.shape[0],
@@ -272,7 +283,7 @@ def solve_rotations(sift_features, cameraMatrix, inertial_rotations, args):
   # Now given 3 values of z, we reconstruct the rotation matrices R^{i} for each frame i.
   # These will be rotation matrices in a common coordinate frame, however not the world coordinate frame.
   # If we know the world coordinate frame of the first frame, we can rotate all matricies to the world coordinate frame.
-  matches_cache_path = helpers.get_file_path_pack_dir(args.input, "matches_cache")
+  matches_cache_path = helpers.get_file_path_pack_dir(args.directory, "matches_cache")
   matches = load_matches(matches_cache_path) if args.use_matches_cache else []
   if len(matches) == 0:
     matches = find_matches(sift_features, cameraMatrix, inertial_rotations)
@@ -345,7 +356,7 @@ def get_angle_difference(features1, features2, cameraMatrix, current_frame=None,
 
   # if inliers < 50 or inliers_dice < 0.1:
   # return (None, None, None)
-  if inliers < 4 or inliers_dice < 0.04:
+  if inliers < 20 or inliers_dice < 0.05:
     return (None, None, None)
 
   inlier_points_1 = good_points_1[mask.ravel() == 1]
