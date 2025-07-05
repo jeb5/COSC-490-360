@@ -356,7 +356,7 @@ def get_angle_difference(features1, features2, cameraMatrix, current_frame=None,
 
   # if inliers < 50 or inliers_dice < 0.1:
   # return (None, None, None)
-  if inliers < 20 or inliers_dice < 0.05:
+  if inliers < 50 or inliers_dice < 0.05:
     return (None, None, None)
 
   inlier_points_1 = good_points_1[mask.ravel() == 1]

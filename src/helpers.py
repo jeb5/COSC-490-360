@@ -189,3 +189,152 @@ def load_camera_info(camera_info_path):
       else False
     )
   return intrinsic_matrix, distortion_coefficients
+
+import torch
+
+
+def apply_vignette_alpha(image, fade_start_pct, fade_end_pct=None):
+  """
+  Applies a vignette-style alpha fade to an (H, W, 4) image tensor using percentage-based edge distances.
+
+  If fade_end_pct is not specified, a hard crop is applied: everything within fade_start_pct is transparent,
+  everything else is fully opaque.
+
+  Args:
+      image: Tensor of shape (H, W, 4)
+      fade_start_pct: Fraction of image dimension from edge where pixels are fully transparent (0.0 to 1.0)
+      fade_end_pct: Fraction of image dimension from edge where pixels become fully opaque (0.0 to 1.0)
+  """
+  assert image.ndim == 3 and image.shape[2] == 4, "Image must have shape (H, W, 4)"
+  H, W, _ = image.shape
+  device = image.device
+
+  min_dim = min(H, W)
+  fade_start = fade_start_pct * min_dim
+  fade_end = fade_end_pct * min_dim if fade_end_pct is not None else fade_start
+
+  assert 0.0 <= fade_start_pct <= 0.5, "fade_start_pct must be between 0 and 0.5"
+  if fade_end_pct is not None:
+    assert fade_start_pct <= fade_end_pct <= 0.5, "fade_end_pct must be >= fade_start_pct and <= 0.5"
+
+  # Create coordinate grids
+  y = torch.arange(H, device=device).float()
+  x = torch.arange(W, device=device).float()
+  yy, xx = torch.meshgrid(y, x, indexing="ij")
+
+  # Compute distance to closest edge
+  dist_top = yy
+  dist_bottom = H - 1 - yy
+  dist_left = xx
+  dist_right = W - 1 - xx
+
+  dist_to_edge = torch.minimum(torch.minimum(dist_top, dist_bottom), torch.minimum(dist_left, dist_right))
+
+  if fade_end_pct is None or fade_start == fade_end:
+    alpha_mask = (dist_to_edge >= fade_start).float()
+  else:
+    alpha_mask = torch.clamp((dist_to_edge - fade_start) / (fade_end - fade_start), 0.0, 1.0)
+
+  new_image = image.clone()
+  new_image[..., 3] = new_image[..., 3] * alpha_mask
+
+  return new_image
+
+
+def apply_circular_vignette_alpha(image, fade_start_pct, fade_end_pct=None):
+  """
+  Applies a circular vignette-style alpha fade to an (H, W, 4) image tensor.
+
+  Args:
+      image: Tensor of shape (H, W, 4)
+      fade_start_pct: 0.0 = fully cropped; 1.0 = circle fully encompasses image (no vignette)
+      fade_end_pct: Optional. If provided, creates a smooth gradient. If omitted, makes a hard circular crop.
+  """
+  assert image.ndim == 3 and image.shape[2] == 4, "Image must have shape (H, W, 4)"
+  H, W, _ = image.shape
+  device = image.device
+
+  cx, cy = W / 2, H / 2
+
+  # Use half-diagonal as max radius
+  max_radius = (H**2 + W**2) ** 0.5 / 2
+
+  y = torch.arange(H, device=device).float()
+  x = torch.arange(W, device=device).float()
+  yy, xx = torch.meshgrid(y, x, indexing="ij")
+  dx = xx - cx
+  dy = yy - cy
+  dist_from_center = torch.sqrt(dx**2 + dy**2)
+
+  start = fade_start_pct * max_radius
+  end = fade_end_pct * max_radius if fade_end_pct is not None else start
+
+  assert 0.0 <= fade_start_pct <= 1.0, "fade_start_pct must be in [0, 1]"
+  if fade_end_pct is not None:
+    assert fade_start_pct <= fade_end_pct <= 1.0, "fade_end_pct must be >= start and <= 1.0"
+
+  if fade_end_pct is None or start == end:
+    alpha_mask = (dist_from_center <= start).float()
+  else:
+    alpha_mask = torch.clamp((end - dist_from_center) / (end - start), 0.0, 1.0)
+
+  new_image = image.clone()
+  new_image[..., 3] = new_image[..., 3] * alpha_mask
+
+  return new_image
+
+
+import torch
+
+
+def apply_combined_vignette_alpha(image, circ_start_pct, circ_end_pct=None, rect_start_pct=0.0, rect_end_pct=None):
+  """
+  Applies a combined circular and rectangular vignette alpha to an (H, W, 4) image tensor.
+  """
+  assert image.ndim == 3 and image.shape[2] == 4
+  H, W, _ = image.shape
+  device = image.device
+
+  # Create coordinate grid once
+  y = torch.linspace(0, H - 1, H, device=device)
+  x = torch.linspace(0, W - 1, W, device=device)
+  yy, xx = torch.meshgrid(y, x, indexing="ij")
+
+  # Precompute common terms
+  cx, cy = W / 2, H / 2
+  dx = xx - cx
+  dy = yy - cy
+  dist_from_center = torch.sqrt(dx * dx + dy * dy)
+
+  # Max radius is half-diagonal length
+  max_radius = (H**2 + W**2) ** 0.5 / 2
+  circ_start = circ_start_pct * max_radius
+  circ_end = circ_end_pct * max_radius if circ_end_pct is not None else circ_start
+
+  # Circular alpha
+  if circ_end == circ_start:
+    circ_alpha = (dist_from_center <= circ_start).float()
+  else:
+    circ_alpha = torch.clamp((circ_end - dist_from_center) / (circ_end - circ_start), 0.0, 1.0)
+
+  # Rectangular distance to nearest edge
+  dist_to_edge = torch.minimum(torch.minimum(yy, H - 1 - yy), torch.minimum(xx, W - 1 - xx))
+
+  # Rect alpha
+  min_dim = min(H, W)
+  rect_start = rect_start_pct * min_dim
+  rect_end = rect_end_pct * min_dim if rect_end_pct is not None else rect_start
+
+  if rect_end == rect_start:
+    rect_alpha = (dist_to_edge >= rect_start).float()
+  else:
+    rect_alpha = torch.clamp((dist_to_edge - rect_start) / (rect_end - rect_start), 0.0, 1.0)
+
+  # Final alpha mask = circular * rectangular
+  alpha_mask = circ_alpha * rect_alpha
+
+  # Apply to alpha channel
+  result = image.clone()
+  result[..., 3].mul_(alpha_mask)
+
+  return result
