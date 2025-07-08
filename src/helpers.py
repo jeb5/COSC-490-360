@@ -1,5 +1,6 @@
 import csv
 import json
+import math
 import numpy as np
 import cv2 as cv
 import torch
@@ -152,6 +153,7 @@ def rotations_from_csv(csv_path):
 def get_file_path_pack_dir(dir_path, type):
   possible_postfixes = {
     "video": [".mp4", ".mkv"],
+    "360_video": ["360.mp4", "360.mkv"],
     "debug_video": [".debug.mp4", ".debug.mkv"],
     "inertial": [".inertial.csv"],
     "visual": [".visual.csv"],
@@ -169,7 +171,9 @@ def get_file_path_pack_dir(dir_path, type):
     for file in files_present:
       if file.lower().endswith(postfixes):
         # So that videos don't match debug videos (Rather than come up with a more robust algorithm, this is my quick patch)
-        if type != "video" or not file.lower().endswith(tuple(possible_postfixes["debug_video"])):
+        if type != "video" or not file.lower().endswith(
+          tuple(possible_postfixes["debug_video"] + possible_postfixes["360_video"])
+        ):
           return os.path.join(dir_path, file)
   dir_name = os.path.basename(dir_path)
   file_name = f"{dir_name}{postfixes[0]}"
@@ -183,108 +187,8 @@ def load_camera_info(camera_info_path):
   with open(camera_info_path, "r") as f:
     camera_info = json.load(f)
     intrinsic_matrix = np.array(camera_info["intrinsic_matrix"], dtype=np.float32)
-    distortion_coefficients = (
-      np.array(camera_info["distortion_coefficients"], dtype=np.float32)
-      if len(camera_info["distortion_coefficients"]) > 0
-      else False
-    )
+    distortion_coefficients = np.array(camera_info["distortion_coefficients"], dtype=np.float32)
   return intrinsic_matrix, distortion_coefficients
-
-import torch
-
-
-def apply_vignette_alpha(image, fade_start_pct, fade_end_pct=None):
-  """
-  Applies a vignette-style alpha fade to an (H, W, 4) image tensor using percentage-based edge distances.
-
-  If fade_end_pct is not specified, a hard crop is applied: everything within fade_start_pct is transparent,
-  everything else is fully opaque.
-
-  Args:
-      image: Tensor of shape (H, W, 4)
-      fade_start_pct: Fraction of image dimension from edge where pixels are fully transparent (0.0 to 1.0)
-      fade_end_pct: Fraction of image dimension from edge where pixels become fully opaque (0.0 to 1.0)
-  """
-  assert image.ndim == 3 and image.shape[2] == 4, "Image must have shape (H, W, 4)"
-  H, W, _ = image.shape
-  device = image.device
-
-  min_dim = min(H, W)
-  fade_start = fade_start_pct * min_dim
-  fade_end = fade_end_pct * min_dim if fade_end_pct is not None else fade_start
-
-  assert 0.0 <= fade_start_pct <= 0.5, "fade_start_pct must be between 0 and 0.5"
-  if fade_end_pct is not None:
-    assert fade_start_pct <= fade_end_pct <= 0.5, "fade_end_pct must be >= fade_start_pct and <= 0.5"
-
-  # Create coordinate grids
-  y = torch.arange(H, device=device).float()
-  x = torch.arange(W, device=device).float()
-  yy, xx = torch.meshgrid(y, x, indexing="ij")
-
-  # Compute distance to closest edge
-  dist_top = yy
-  dist_bottom = H - 1 - yy
-  dist_left = xx
-  dist_right = W - 1 - xx
-
-  dist_to_edge = torch.minimum(torch.minimum(dist_top, dist_bottom), torch.minimum(dist_left, dist_right))
-
-  if fade_end_pct is None or fade_start == fade_end:
-    alpha_mask = (dist_to_edge >= fade_start).float()
-  else:
-    alpha_mask = torch.clamp((dist_to_edge - fade_start) / (fade_end - fade_start), 0.0, 1.0)
-
-  new_image = image.clone()
-  new_image[..., 3] = new_image[..., 3] * alpha_mask
-
-  return new_image
-
-
-def apply_circular_vignette_alpha(image, fade_start_pct, fade_end_pct=None):
-  """
-  Applies a circular vignette-style alpha fade to an (H, W, 4) image tensor.
-
-  Args:
-      image: Tensor of shape (H, W, 4)
-      fade_start_pct: 0.0 = fully cropped; 1.0 = circle fully encompasses image (no vignette)
-      fade_end_pct: Optional. If provided, creates a smooth gradient. If omitted, makes a hard circular crop.
-  """
-  assert image.ndim == 3 and image.shape[2] == 4, "Image must have shape (H, W, 4)"
-  H, W, _ = image.shape
-  device = image.device
-
-  cx, cy = W / 2, H / 2
-
-  # Use half-diagonal as max radius
-  max_radius = (H**2 + W**2) ** 0.5 / 2
-
-  y = torch.arange(H, device=device).float()
-  x = torch.arange(W, device=device).float()
-  yy, xx = torch.meshgrid(y, x, indexing="ij")
-  dx = xx - cx
-  dy = yy - cy
-  dist_from_center = torch.sqrt(dx**2 + dy**2)
-
-  start = fade_start_pct * max_radius
-  end = fade_end_pct * max_radius if fade_end_pct is not None else start
-
-  assert 0.0 <= fade_start_pct <= 1.0, "fade_start_pct must be in [0, 1]"
-  if fade_end_pct is not None:
-    assert fade_start_pct <= fade_end_pct <= 1.0, "fade_end_pct must be >= start and <= 1.0"
-
-  if fade_end_pct is None or start == end:
-    alpha_mask = (dist_from_center <= start).float()
-  else:
-    alpha_mask = torch.clamp((end - dist_from_center) / (end - start), 0.0, 1.0)
-
-  new_image = image.clone()
-  new_image[..., 3] = new_image[..., 3] * alpha_mask
-
-  return new_image
-
-
-import torch
 
 
 def apply_combined_vignette_alpha(image, circ_start_pct, circ_end_pct=None, rect_start_pct=0.0, rect_end_pct=None):
@@ -338,3 +242,20 @@ def apply_combined_vignette_alpha(image, circ_start_pct, circ_end_pct=None, rect
   result[..., 3].mul_(alpha_mask)
 
   return result
+
+def get_sequence(n, first_consecutive, max):
+  """
+  Generate an increasing sequence of n numbers. The first `first_consecutive` numbers are consecutive integers starting from 1. The rest are generated with a cubic function, with the n-1th number being `max`.
+  """
+
+  def f(x, a=10, b=30, c=3000):
+    if x < a:
+      return x
+    else:
+      x = x - a
+      b = b - a
+      # cubic function with f'(a) = 1, f(a) = a, f(b) = max
+      return math.floor(((c - a - b) / math.pow(b, 3)) * math.pow(x, 3) + x + a)
+
+  sequence = [f(i + 1, first_consecutive, n, max) for i in range(n)]
+  return sequence

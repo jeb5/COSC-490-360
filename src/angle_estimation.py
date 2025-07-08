@@ -17,15 +17,17 @@ import helpers
 import progressbar as pb
 import sys
 import signal
+import networkx as nx
 from video_writer import VideoWriter
 from scipy.spatial.transform import Rotation as R
+from scipy.sparse.linalg import eigsh, svds
+import scipy.sparse
 
 
 def main(args):
   input_video_path = helpers.get_file_path_pack_dir(args.directory, "video")
   input_inertial_path = helpers.get_file_path_pack_dir(args.directory, "inertial")
   output_visual_path = helpers.get_file_path_pack_dir(args.directory, "visual")
-  features_cache_path = helpers.get_file_path_pack_dir(args.directory, "features_cache")
 
   cam_matrix, cam_distortion = helpers.load_camera_info(helpers.get_file_path_pack_dir(args.directory, "camera_info"))
 
@@ -70,46 +72,19 @@ def main(args):
 
   signal.signal(signal.SIGINT, interupt_handler)
   try:
-    bar = pb.ProgressBar(
-      max_value=(end_frame - start_frame + 1),
-      widgets=["Reading inertial data: ", pb.GranularBar()],
-    )
-
     inertial_rotations = [
       R.from_euler("ZXY", [xyz[2], xyz[0], xyz[1]], degrees=True).as_matrix()
       for frame, xyz in helpers.rotations_from_csv(input_inertial_path)
     ]
     inertial_rotations = inertial_rotations[start_frame : end_frame + 1]
 
-    frame_features = load_features(features_cache_path) if args.use_features_cache else []
-    if len(frame_features) == 0:
-      bar = pb.ProgressBar(
-        max_value=(end_frame - start_frame + 1),
-        widgets=["Finding SIFT features: ", pb.Percentage(), " ", pb.GranularBar()],
-      )
-      for i in bar(range(end_frame - start_frame + 1)):
-        frame = start_frame + i
-        input_video.set(cv.CAP_PROP_POS_FRAMES, frame)
-        ret, image = input_video.read()
-        image_undistorted = image if m1 is None else cv.remap(image, m1, m2, cv.INTER_LINEAR)
-        frame_features.append(get_features(image_undistorted))
-      cache_features(frame_features, features_cache_path)
-
     visual_rotations = []
     if args.naive_chaining:
       visual_rotations = chain_rotations(
-        frame_features,
-        inertial_rotations,
-        new_cam_mat,
-        input_video,
-        start_frame,
-        end_frame,
-        output_debug_video,
-        m1,
-        m2,
+        inertial_rotations, new_cam_mat, input_video, start_frame, end_frame, output_debug_video, m1, m2, args
       )
     else:
-      visual_rotations = solve_rotations(frame_features, new_cam_mat, inertial_rotations, args)
+      visual_rotations = solve_rotations(new_cam_mat, inertial_rotations, input_video, start_frame, end_frame, m1, m2, args)
 
     # Output visual rotation (in xyz order)
     with open(output_visual_path, "w") as csvfile:
@@ -147,18 +122,10 @@ def main(args):
     cleanup()
 
 
-def chain_rotations(
-  frame_features,
-  inertial_rotations,
-  new_cam_mat,
-  input_video,
-  start_frame,
-  end_frame,
-  output_debug_video,
-  m1,
-  m2,
-):
+def chain_rotations(inertial_rotations, new_cam_mat, input_video, start_frame, end_frame, output_debug_video, m1, m2, args):
   visual_rotations = []
+
+  frame_features = get_video_features(args, input_video, start_frame, end_frame, m1, m2)
 
   bar = pb.ProgressBar(
     max_value=(end_frame - start_frame + 1),
@@ -230,50 +197,74 @@ def chain_rotations(
   return visual_rotations
 
 
-def find_matches(sift_features, cameraMatrix, inertial_rotations):
+def get_video_features(args, input_video, start_frame, end_frame, m1, m2):
+  features_cache_path = helpers.get_file_path_pack_dir(args.directory, "features_cache")
+  frame_features = load_features(features_cache_path) if args.use_features_cache else []
+  if len(frame_features) == 0:
+    bar = pb.ProgressBar(
+      max_value=(end_frame - start_frame + 1),
+      widgets=["Finding SIFT features: ", pb.Percentage(), " ", pb.GranularBar(), " ", pb.ETA()],
+    )
+    for i in bar(range(end_frame - start_frame + 1)):
+      frame = start_frame + i
+      input_video.set(cv.CAP_PROP_POS_FRAMES, frame)
+      ret, image = input_video.read()
+      image_undistorted = image if m1 is None else cv.remap(image, m1, m2, cv.INTER_LINEAR)
+      frame_features.append(get_features(image_undistorted))
+    cache_features(frame_features, features_cache_path)
+  return frame_features
+
+
+def find_matches(sift_features, cameraMatrix, inertial_rotations, window_size=None):
   frame_relations_picture = np.zeros((len(sift_features) * 2, len(sift_features), 3), dtype=np.uint8)
   matches = []
   n = len(sift_features)
-  max_value = n * (n - 1) // 2
+  loop_states = []
+  back_sequence = helpers.get_sequence(50, 10, 3000)
+  for i in range(n):
+    # for j in range(0, i) if window_size is None else range(max(0, i - window_size), i):
+    for j in (i - x for x in back_sequence):
+      if j < 0:
+        continue
+      loop_states.append((i, j))
+
   bar = pb.ProgressBar(
-    max_value=max_value,
+    max_value=len(loop_states),
     widgets=["Finding matches: ", pb.Percentage(), " ", pb.GranularBar(), " ", pb.ETA()],
     redirect_stdout=True,
   ).start()
-  idx = 0
-  total_angle_diff = 0.0
-  for i in range(len(sift_features)):
-    for j in range(0, i):
-      match_rot, _, extra_info = get_angle_difference(sift_features[j], sift_features[i], cameraMatrix)
 
-      intertial_rotation_change = np.linalg.inv(inertial_rotations[j]) @ inertial_rotations[i]
-      # intertial_overlap_percent = get_homography_overlap_percent(intertial_rotation_change, cameraMatrix)
-      # frame_relations_picture[i * 2 + 1, j, 1] = intertial_overlap_percent * 255
-      if match_rot is not None:
-        matches.append((i, j, match_rot))
-        frame_relations_picture[i * 2, j, 0] = 255
-        frame_relations_picture[i * 2, j, 2] = (min(extra_info["inliers_dice"] * 4, 1)) * 255
+  for idx, (i, j) in enumerate(loop_states):
+    match_rot, _, extra_info = get_angle_difference(sift_features[j], sift_features[i], cameraMatrix)
 
-        difference = np.linalg.inv(match_rot) @ intertial_rotation_change
-        angle_diff = np.linalg.norm(R.from_matrix(difference).as_rotvec(degrees=True))
-        frame_relations_picture[i * 2 + 1, j, 1] = min(angle_diff / 0.5, 1) * 255
-        total_angle_diff += angle_diff
-        if angle_diff > 0.2:
-          print("Large angle difference detected:")
-          print(f"  Frame {i} to {j}: {angle_diff:.2f} degrees")
-          print(f"  Inliers: {extra_info['inliers']}, Dice: {extra_info['inliers_dice']:.2f}")
-          print(f"  Orthonormality: {extra_info['orthonormality']:.2f}")
+    # intertial_rotation_change = np.linalg.inv(inertial_rotations[j]) @ inertial_rotations[i]
+    # intertial_overlap_percent = get_homography_overlap_percent(intertial_rotation_change, cameraMatrix)
+    # frame_relations_picture[i * 2 + 1, j, 1] = intertial_overlap_percent * 255
+    if match_rot is not None:
+      matches.append((i, j, match_rot))
+      frame_relations_picture[i * 2, j, 0] = 255
+      frame_relations_picture[i * 2, j, 2] = (min(extra_info["inliers_dice"] * 4, 1)) * 255
 
-      idx += 1
-      bar.update(idx)
+      # difference = np.linalg.inv(match_rot) @ intertial_rotation_change
+      # angle_diff = np.linalg.norm(R.from_matrix(difference).as_rotvec(degrees=True))
+      # frame_relations_picture[i * 2 + 1, j, 1] = min(angle_diff / 0.5, 1) * 255
+      # total_angle_diff += angle_diff
+      # if angle_diff > 0.5:
+      #   print("Large angle difference detected:")
+      #   print(f"  Frame {i} to {j}: {angle_diff:.2f} degrees")
+      #   print(f"  Inliers: {extra_info['inliers']}, Dice: {extra_info['inliers_dice']:.2f}")
+      #   print(f"  Orthonormality: {extra_info['orthonormality']:.2f}")
+
+    bar.update(idx)
   bar.finish()
-  print(f"Average angle difference: {total_angle_diff / len(matches):.2f} degrees")
-  print(f"Total matches found: {len(matches)}")
+  # print(f"Average angle difference: {total_angle_diff / len(matches):.2f} degrees")
+  # print(f"Total matches found: {len(matches)}")
   cv.imwrite("temp/frame_relations_new.png", frame_relations_picture)
+
   return matches
 
 
-def solve_rotations(sift_features, cameraMatrix, inertial_rotations, args):
+def solve_rotations(cameraMatrix, inertial_rotations, input_video, start_frame, end_frame, m1, m2, args):
   # Take list of frame features (SIFT lists)
   # For each frame, get with ALL previous frames (n^2, or more precisely, n(n-1)/2)
   # For each match pair, estimate rotation using homography. If not enough points, skip.
@@ -286,19 +277,66 @@ def solve_rotations(sift_features, cameraMatrix, inertial_rotations, args):
   matches_cache_path = helpers.get_file_path_pack_dir(args.directory, "matches_cache")
   matches = load_matches(matches_cache_path) if args.use_matches_cache else []
   if len(matches) == 0:
-    matches = find_matches(sift_features, cameraMatrix, inertial_rotations)
+    features = get_video_features(args, input_video, start_frame, end_frame, m1, m2)
+    matches = find_matches(features, cameraMatrix, inertial_rotations, 10)
     cache_matches(matches, matches_cache_path)
 
-  l, m = len(matches), len(sift_features)  # noqa: E741
-  A = torch.zeros((l * 3, m * 3), dtype=torch.float32)
-  for idx, (i, j, match_rot) in enumerate(matches):
+  G = nx.Graph()
+  for i, j, match_rot in matches:
+    G.add_edge(i, j)
+
+  connected_to_first = list(nx.node_connected_component(G, 0))
+  m = max(connected_to_first) + 1
+  # matches in connected graph (edges for which i and j are in connected_to_first)
+  connected_matches = [(i, j, match_rot) for i, j, match_rot in matches if i in connected_to_first and j in connected_to_first]
+
+  mask = np.zeros((m,), dtype=bool)
+  mask[connected_to_first] = True
+
+  A = torch.zeros((len(connected_matches) * 3, m * 3), dtype=torch.float32)
+  for idx, (i, j, match_rot) in enumerate(connected_matches):
+    print(idx, i, j, match_rot.shape)
+    print("Shape of A:", A.shape)
     A[idx * 3 : idx * 3 + 3, i * 3 : i * 3 + 3] = -torch.from_numpy(match_rot)
-    # A[idx * 3 : idx * 3 + 3, i * 3 : i * 3 + 3] = -torch.from_numpy(match_rot)
     A[idx * 3 : idx * 3 + 3, j * 3 : j * 3 + 3] = torch.eye(3, dtype=torch.float32)
-  U, S, Vt = torch.linalg.svd(A)
-  z1 = Vt[-1]
-  z2 = Vt[-2]
-  z3 = Vt[-3]
+  # U, S, Vt = torch.linalg.svd(A)
+  # z1 = Vt[-1]
+  # z2 = Vt[-2]
+  # z3 = Vt[-3]
+
+  A_sp = A.to(torch.float64).cpu().numpy()
+  A_sp = scipy.sparse.csr_matrix(A_sp)
+  U, S, Vt = svds(A_sp, k=3, which="SM")
+  z1 = torch.from_numpy(Vt[-1]).float()
+  z2 = torch.from_numpy(Vt[-2]).float()
+  z3 = torch.from_numpy(Vt[-3]).float()
+
+  # AtA = A.T @ A
+  # # # AtA = AtA + torch.eye(AtA.shape[0], dtype=AtA.dtype, device=AtA.device) * 1e-3  # Regularization for numerical stability
+  # print("Shape of AtA:", AtA.shape)
+  # # AtA = AtA.cpu().numpy()  # Convert to numpy for eigsh
+  # print("Is NaN:", torch.isnan(AtA).any())  # Should be False
+  # print("Is Inf:", torch.isinf(AtA).any())  # Should be False
+  # print("Extremes:", AtA.min(), AtA.max())  # Look for extreme values
+  # symmetric = torch.allclose(AtA, AtA.T, atol=1e-8)
+  # print("Is symmetric:", symmetric)
+  # # crude condition estimate
+  # cond = AtA.abs().max() / AtA.abs().min()
+  # print("Condition number estimate:", cond)
+
+  # # eigenvalues, eigenvectors = torch.linalg.eigh(AtA)
+  # # smallest_eigenvalues_indices = torch.argsort(eigenvalues)[:3]
+  # # z1 = eigenvectors[:, smallest_eigenvalues_indices[0]]
+  # # z2 = eigenvectors[:, smallest_eigenvalues_indices[1]]
+  # # z3 = eigenvectors[:, smallest_eigenvalues_indices[2]]
+
+  # eigenvalues, eigenvectors = eigsh(AtA.cpu().numpy(), k=3, which="SM")
+  # eigenvectors = torch.from_numpy(eigenvectors).float()
+  # z1 = eigenvectors[:, 0]
+  # z2 = eigenvectors[:, 1]
+  # z3 = eigenvectors[:, 2]
+  # print("Eigenvalues:", eigenvalues)
+
   rotations = torch.stack([z1, z2, z3], dim=1).vsplit(m)
   initial_correction = None
   visual_rotations = []
@@ -308,10 +346,13 @@ def solve_rotations(sift_features, cameraMatrix, inertial_rotations, args):
     rotation = U @ Vt  # Orthnormalized
     rotation = rotation.T
     if i == 0:
-      initial_correction = rotation.T
+      initial_correction = inertial_rotations[0] @ rotation.T
 
     rotation = initial_correction @ rotation
-    visual_rotations.append(rotation)
+    if mask[i]:
+      visual_rotations.append(rotation)
+    else:
+      visual_rotations.append(None)
 
   return visual_rotations
 
@@ -354,10 +395,10 @@ def get_angle_difference(features1, features2, cameraMatrix, current_frame=None,
   inliers = np.sum(mask)
   inliers_dice = (2 * inliers) / (len(kp1) + len(kp2))
 
-  # if inliers < 50 or inliers_dice < 0.1:
-  # return (None, None, None)
-  if inliers < 50 or inliers_dice < 0.05:
+  if inliers < 50 or inliers_dice < 0.1:
     return (None, None, None)
+  # if inliers < 10 or inliers_dice < 0.03:
+  #   return (None, None, None)
 
   inlier_points_1 = good_points_1[mask.ravel() == 1]
   inlier_points_2 = good_points_2[mask.ravel() == 1]

@@ -1,9 +1,7 @@
-import csv
 import os
 import pickle
 import cv2 as cv
 from matplotlib import pyplot as plt
-from scipy.spatial.transform import Rotation as R
 import shapely
 import numpy as np
 
@@ -47,6 +45,8 @@ def get_features(image, lower_bound=200):
     kp, des = sift.detectAndCompute(image, None)
     if len(kp) < lower_bound:
       threshold_multiplier *= 0.8
+      if threshold_multiplier < 0.2:
+        raise ValueError("Failed to find enough keypoints in image")
     else:
       break
   return (kp, des)

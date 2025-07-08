@@ -117,6 +117,7 @@ class VideoWriter:
         addSphericalMetadata(self.temp_path, self.filename)
       else:
         shutil.move(self.temp_path, self.filename)
+      print(f"Saved video to {self.filename} with {self.frame_number} frames.")
 
     self.__cleanup__()
 

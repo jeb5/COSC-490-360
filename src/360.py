@@ -88,7 +88,8 @@ def main(args):
     image = cv.cvtColor(image, cv.COLOR_BGR2BGRA)
     image = torch.from_numpy(image).to(device).float()
     # image = helpers.apply_circular_vignette_alpha(image, 0.85, 0.9)
-    image = helpers.apply_combined_vignette_alpha(image, 0.75, 0.8, 0.0, 0.05)
+    # image = helpers.apply_combined_vignette_alpha(image, 0.75, 0.8, 0.0, 0.05)
+    image = helpers.apply_combined_vignette_alpha(image, circ_start_pct=0.7, rect_start_pct=0.1)
     image = remap.torch_remap(undistort_map, image) if undistort_map is not None else image
 
     if rotation is not None:
