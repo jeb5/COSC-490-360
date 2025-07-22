@@ -15,6 +15,7 @@ matplotlib = "*"
 scipy = "*"
 shapely = "*"
 progressbar2 = "*"
+ngdsac-horizon = {git = "https://github.com/jeb5/ngdsac_horizon.git"}
 
 [dev-packages]
 

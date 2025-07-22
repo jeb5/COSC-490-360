@@ -22,31 +22,33 @@ class VideoWriter:
     extension = filename.split(".")[-1]
     self.temp_path = f"{self.temp_dir}/temp.{extension}"
 
+    ffmpeg_command = [
+      "ffmpeg",
+      "-hide_banner",
+      "-loglevel",
+      "error",
+      "-y",
+      "-f",
+      "rawvideo",
+      "-pixel_format",
+      "bgr24",
+      "-video_size",
+      f"{size[0]}x{size[1]}",
+      "-framerate",
+      str(fps),
+      "-i",
+      "-",
+      # "-vf",
+      # "format=yuv420p",
+      *(["-c:v", "h264_videotoolbox"] if size[0] < 4096 else []),  # Use hardware encoding for smaller resolutions
+      "-pix_fmt",
+      "yuv420p",
+      self.temp_path,
+    ]
+    print(f"Starting ffmpeg with command: {' '.join(ffmpeg_command)}")
+
     self.ffmpeg_process = subprocess.Popen(
-      [
-        "ffmpeg",
-        "-hide_banner",
-        "-loglevel",
-        "error",
-        "-y",
-        "-f",
-        "rawvideo",
-        "-pixel_format",
-        "bgr24",
-        "-video_size",
-        f"{size[0]}x{size[1]}",
-        "-framerate",
-        str(fps),
-        "-i",
-        "-",
-        # "-vf",
-        # "format=yuv420p",
-        "-c:v",
-        "h264_videotoolbox",
-        "-pix_fmt",
-        "yuv420p",
-        self.temp_path,
-      ],
+      ffmpeg_command,
       stdin=subprocess.PIPE,
       stderr=subprocess.PIPE,
       stdout=subprocess.PIPE,

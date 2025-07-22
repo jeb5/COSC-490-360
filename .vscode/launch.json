@@ -16,7 +16,7 @@
 			"program": "src/360.py",
 			"console": "integratedTerminal",
 			"cwd": "${workspaceFolder}",
-			"args": ["output/balloon_test.mp4", "temp/balloon_test.csv", "output/balloon_test_mapped.mp4", "--scale", "0.25"]
+			"args": ["input/balloon_sample", "visual", "--scale", "0.5"]
 		}
 	]
 }

@@ -18,7 +18,8 @@ dependencies = [
 		"numpy",
 		"opencv-python", 
 		"line-profiler",
-		"spatialmedia @ git+https://github.com/google/spatial-media.git"
+		"spatialmedia @ git+https://github.com/google/spatial-media.git",
+		"ngdsac_horizon @ git+https://github.com/jeb5/ngdsac_horizon.git",
 ]
 
 [tool.setuptools.packages.find]

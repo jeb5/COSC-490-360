@@ -171,7 +171,7 @@ def Rx(gamma):
 
 
 # Plots rotations histories in a z-up 3D space plot
-def generate_rotation_histories_plot(rotation_histories, extra_text=None, extra_rot=None, interactive=False):
+def generate_rotation_histories_plot(rotation_histories, extra_text=None, extra_rot=None, interactive=False, legend=True):
   text_fig = None
   if extra_text is not None:
     text_fig = plt.figure(figsize=(3, 1.4))
@@ -250,7 +250,8 @@ def generate_rotation_histories_plot(rotation_histories, extra_text=None, extra_
   ax_main.set_xlim(-1, 1)
   ax_main.set_ylim(-1, 1)
   ax_main.set_zlim(-1, 1)
-  ax_main.legend()
+  if legend:
+    ax_main.legend()
   ax_main.set_xticklabels([])
   ax_main.set_yticklabels([])
   ax_main.set_zticklabels([])

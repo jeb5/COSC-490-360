@@ -1,2 +1,2 @@
 #!/bin/bash
-python input/synthetic1 --output_debug_video --naive_chaining
+python src/angle_estimation.py input/synthetic1 --output_debug_video --naive_chaining

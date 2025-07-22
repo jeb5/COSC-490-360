@@ -16,6 +16,7 @@ import argparse
 def main(args):
   torch.set_printoptions(precision=3, sci_mode=False)
   input_video_path = helpers.get_file_path_pack_dir(args.input_directory, "video")
+  print(f"Input video path: {input_video_path}")
   input_rotation_path = helpers.get_file_path_pack_dir(args.input_directory, args.rotation_file_type)
   output_video_path = (
     args.output_path
@@ -28,6 +29,7 @@ def main(args):
 
   in_w, in_h = int(input_video.get(cv.CAP_PROP_FRAME_WIDTH)), int(input_video.get(cv.CAP_PROP_FRAME_HEIGHT))
   input_size = (in_w, in_h)
+  input_frames = int(input_video.get(cv.CAP_PROP_FRAME_COUNT))
 
   vertical_focal_length = cam_matrix[1][1]
   horizontal_focal_length = cam_matrix[0][0]
@@ -77,7 +79,10 @@ def main(args):
   rotations = helpers.rotations_from_csv(input_rotation_path)
   next_rotation = next(rotations, None)
 
-  for frame in range(int(input_video.get(cv.CAP_PROP_FRAME_COUNT))):
+  N = 16
+  last_N_frames = []
+
+  for frame in range(input_frames):
     rotation = None
     if next_rotation is not None and next_rotation[0] == frame:
       rotation = next_rotation[1]
@@ -89,7 +94,7 @@ def main(args):
     image = torch.from_numpy(image).to(device).float()
     # image = helpers.apply_circular_vignette_alpha(image, 0.85, 0.9)
     # image = helpers.apply_combined_vignette_alpha(image, 0.75, 0.8, 0.0, 0.05)
-    image = helpers.apply_combined_vignette_alpha(image, circ_start_pct=0.7, rect_start_pct=0.1)
+    # image = helpers.apply_combined_vignette_alpha(image, circ_start_pct=0.7, rect_start_pct=0.1)
     image = remap.torch_remap(undistort_map, image) if undistort_map is not None else image
 
     if rotation is not None:
@@ -97,10 +102,26 @@ def main(args):
       print(f"Frame: {frame}, Pitch: {pitch:.2f}˚, Roll: {roll:.2f}˚, Yaw: {yaw:.2f}˚")
       map360 = remap_360.remapping360_torch(in_w, in_h, yaw, pitch, roll, ideal_focal_length, output_vectors)
       dst = remap.torch_remap(map360, image)
+      # dst = helpers.BGRAToBGRAlphaBlack_torch(dst)
+      # dstcv = dst.cpu().numpy().astype("uint8")
+      # cv.imshow("Dst Frame", dstcv)
+      # cv.imwrite(f"dst.png", dstcv)
+      # cv.waitKey(0)
       background = helpers.add_transparent_image_torch(background, dst)
 
-    output_video.write_frame(background)
+    last_N_frames.append(background)
+    if frame > N:
+      last_N_frames.pop(0)
+
+    output_video.write_frame(average_frames(last_N_frames))
   cleanup()
+
+def average_frames(frames):
+  if not frames:
+    return None
+  avg_frame = torch.mean(torch.stack(frames), dim=0)
+  return avg_frame
+
 
 if __name__ == "__main__":
   parser = argparse.ArgumentParser(description="Remap rotating fotoage to 360 video")
