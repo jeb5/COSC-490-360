@@ -1,5 +1,4 @@
 /output/
-/input/
 /temp/
 /large_inputs/
 *.egg-info
@@ -7,3 +6,4 @@
 **/__pycache__/
 *.blend
 *.blend1
+*.cache

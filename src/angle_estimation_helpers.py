@@ -45,8 +45,9 @@ def get_features(image, lower_bound=200):
     kp, des = sift.detectAndCompute(image, None)
     if len(kp) < lower_bound:
       threshold_multiplier *= 0.8
-      if threshold_multiplier < 0.2:
-        raise ValueError("Failed to find enough keypoints in image")
+      if threshold_multiplier < 0.1:
+        print("WARNING: Failed to find enough keypoints in image")
+        return None
     else:
       break
   return (kp, des)
@@ -306,7 +307,9 @@ def deserialize_keypoints(serialized_kp):
 def cache_features(features, cache_path):
   print(f"Caching features to: {cache_path}")
   with open(cache_path, "wb") as f:
-    serialized_frame_features = [(serialize_keypoints(kp), des.tolist()) for (kp, des) in features]
+    serialized_frame_features = [
+      ((serialize_keypoints(feature[0]), feature[1].tolist()) if feature else (None, None)) for feature in features
+    ]
     pickle.dump(serialized_frame_features, f)
 
 
@@ -315,7 +318,10 @@ def load_features(cache_path):
   if os.path.exists(cache_path):
     with open(cache_path, "rb") as f:
       frame_features_serialized = pickle.load(f)
-      frame_features = [(deserialize_keypoints(kp), np.asarray(des, dtype=np.float32)) for (kp, des) in frame_features_serialized]
+      frame_features = [
+        ((deserialize_keypoints(feature[0]), np.asarray(feature[1], dtype=np.float32)) if feature[0] is not None else None)
+        for feature in frame_features_serialized
+      ]
       return frame_features
   else:
     print("Cache miss")

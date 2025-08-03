@@ -151,6 +151,7 @@ def rotations_from_csv(csv_path):
 
 
 def get_file_path_pack_dir(dir_path, type):
+  dir_path = dir_path.rstrip("/")
   possible_postfixes = {
     "video": [".mp4", ".mkv"],
     "360_video": ["360.mp4", "360.mkv"],

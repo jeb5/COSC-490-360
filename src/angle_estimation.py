@@ -75,6 +75,11 @@ def main(args):
 
   signal.signal(signal.SIGINT, interupt_handler)
   try:
+    if args.warmup:
+      get_video_features(args, input_video, start_frame, end_frame, m1, m2)
+      print("Warmup complete. Exiting.")
+      return
+
     inertial_rotations = [
       R.from_euler("ZXY", [xyz[2], xyz[0], xyz[1]], degrees=True).as_matrix()
       for frame, xyz in helpers.rotations_from_csv(input_inertial_path)
@@ -82,7 +87,7 @@ def main(args):
     inertial_rotations = inertial_rotations[start_frame : end_frame + 1]
 
     visual_rotations = []
-    if args.naive_chaining:
+    if args.window_size == 1:
       visual_rotations = chain_rotations(
         inertial_rotations, new_cam_mat, input_video, start_frame, end_frame, output_debug_video, m1, m2, args
       )
@@ -105,29 +110,35 @@ def main(args):
           )
         )
 
-    generate_rotation_histories_plot(
-      [
-        {"name": "Visual", "colour": "#42a7f5", "data": visual_rotations},
-        {"name": "Inertial", "colour": "#f07d0a", "data": inertial_rotations},
-      ],
-      interactive=True,
-    )
-    generate_rotation_histories_plot(
-      [
-        {"name": "Inertial", "colour": "#f07d0a", "data": inertial_rotations},
-      ],
-      interactive=True,
-      legend=False,
-    )
+      comparison_figure = generate_rotation_histories_plot(
+        [
+          {"name": "Visual", "colour": "#42a7f5", "data": visual_rotations},
+          {"name": "Inertial", "colour": "#f07d0a", "data": inertial_rotations},
+        ],
+        interactive=args.interactive,
+      )
+      reference_figure = generate_rotation_histories_plot(
+        [
+          {"name": "Inertial", "colour": "#f07d0a", "data": inertial_rotations},
+        ],
+        interactive=args.interactive,
+        legend=False,
+      )
+      if args.figure_output:
+        # Concatenate images horizontally and save
+        combined = np.hstack((comparison_figure, reference_figure))
+        cv.imwrite(args.figure_output, combined)
 
     total_angle_difference, count = 0.0, 0.0
     for i in range(len(visual_rotations)):
-      if visual_rotations[i] is None or inertial_rotations[i] is None:
+      if visual_rotations[i] is None:
         continue
       count += 1
       difference = np.linalg.inv(visual_rotations[i]) @ inertial_rotations[i]
       total_angle_difference += np.linalg.norm(R.from_matrix(difference).as_rotvec(degrees=True))
-    print(f"Average angle difference: {total_angle_difference / len(visual_rotations):.2f} degrees")
+    print(f"Average angle difference: {total_angle_difference / count:.2f} degrees")
+    print(f"Visual predictions: {100 * count / len(visual_rotations):.2f}%")
+
   finally:
     cleanup()
 
@@ -168,8 +179,10 @@ def chain_rotations(inertial_rotations, new_cam_mat, input_video, start_frame, e
       visual_rotations.append(inertial_rotations[0])
       match_image = image_undistorted.copy()
     else:
-      visual_rotation_change, match_image, _ = get_angle_difference(
-        frame_features[i - 1], frame_features[i], new_cam_mat, image_undistorted
+      visual_rotation_change, match_image, _ = (
+        get_angle_difference(frame_features[i - 1], frame_features[i], new_cam_mat, image_undistorted, estimation_required=True)
+        if frame_features[i - 1] is not None and frame_features[i] is not None
+        else (None, None, None)
       )
       if visual_rotation_change is None:
         print(f"Homography estimation failed at frame {frame}")
@@ -243,15 +256,13 @@ def get_video_features(args, input_video, start_frame, end_frame, m1, m2):
   return frame_features
 
 
-def find_matches(sift_features, cameraMatrix, inertial_rotations, window_size=None):
+def find_matches(sift_features, cameraMatrix, inertial_rotations, window_size=10, window_mode="simple"):
   frame_relations_picture = np.zeros((len(sift_features) * 2, len(sift_features), 3), dtype=np.uint8)
   matches = []
   n = len(sift_features)
   loop_states = []
-  back_sequence = helpers.get_sequence(50, window_size, 3000)
+  back_sequence = helpers.get_sequence(window_size, window_size // 3, 3000) if window_mode == "quadratic" else range(window_size)
   for i in range(n):
-    # for j in range(0, i):
-    # for j in range(0, i) if window_size is None else range(max(0, i - window_size), i):
     for j in (i - x for x in back_sequence):
       if j < 0:
         continue
@@ -264,7 +275,11 @@ def find_matches(sift_features, cameraMatrix, inertial_rotations, window_size=No
   ).start()
 
   for idx, (i, j) in enumerate(loop_states):
-    match_rot, _, extra_info = get_angle_difference(sift_features[j], sift_features[i], cameraMatrix)
+    match_rot, _, extra_info = (
+      get_angle_difference(sift_features[j], sift_features[i], cameraMatrix)
+      if sift_features[j] is not None and sift_features[i] is not None
+      else (None, None, None)
+    )
 
     intertial_rotation_change = np.linalg.inv(inertial_rotations[j]) @ inertial_rotations[i]
     intertial_overlap_percent = get_homography_overlap_percent(intertial_rotation_change, cameraMatrix)
@@ -307,7 +322,7 @@ def solve_rotations(cameraMatrix, inertial_rotations, input_video, start_frame, 
   matches = load_matches(matches_cache_path) if args.use_matches_cache else []
   if len(matches) == 0:
     features = get_video_features(args, input_video, start_frame, end_frame, m1, m2)
-    matches = find_matches(features, cameraMatrix, inertial_rotations, 6)
+    matches = find_matches(features, cameraMatrix, inertial_rotations, args.window_size, args.window_mode)
     cache_matches(matches, matches_cache_path)
 
   G = nx.Graph()
@@ -354,7 +369,7 @@ def solve_rotations(cameraMatrix, inertial_rotations, input_video, start_frame, 
   return visual_rotations
 
 
-def get_angle_difference(features1, features2, cameraMatrix, current_frame=None, previous_frame=None):
+def get_angle_difference(features1, features2, cameraMatrix, current_frame=None, previous_frame=None, estimation_required=False):
   kp1, des1 = features1
   kp2, des2 = features2
 
@@ -393,7 +408,9 @@ def get_angle_difference(features1, features2, cameraMatrix, current_frame=None,
   inliers = np.sum(mask)
   inliers_dice = (2 * inliers) / (len(kp1) + len(kp2))
 
-  if inliers < 10 or inliers_dice < 0.04:
+  if (not estimation_required) and (inliers < 10 or inliers_dice < 0.04):
+    return (None, None, None)
+  if inliers < 4:
     return (None, None, None)
 
   inlier_points_1 = good_points_1[mask.ravel() == 1]
@@ -415,7 +432,7 @@ def get_angle_difference(features1, features2, cameraMatrix, current_frame=None,
   rotation = entire_transformation(orthonormalized_rotation)
   overlap_percent = get_homography_overlap_percent(rotation, cameraMatrix)
 
-  if overlap_percent < 0.15:
+  if (not estimation_required) and overlap_percent < 0.15:
     return (None, None, None)
 
   match_image = None
@@ -478,7 +495,13 @@ if __name__ == "__main__":
   )
   parser.add_argument("--use_features_cache", action="store_true")
   parser.add_argument("--use_matches_cache", action="store_true")
-  parser.add_argument("--naive_chaining", action="store_true")
+  parser.add_argument("--window_size", type=int, default=1, help="Window size for matching frames. 1 = naive chaining")
+  parser.add_argument(
+    "--window_mode", type=str, choices=["simple", "quadratic"], default="simple", help="Window mode for matching frames."
+  )
+  parser.add_argument("--interactive", action="store_true", help="Show an interactive plot of the rotation histories at the end.")
+  parser.add_argument("--figure_output", type=str, help="Path to save the rotation history figure.")
+  parser.add_argument("--warmup", action="store_true", help="Build feature cache and then exit.")
 
   args = parser.parse_args()
   main(args)
