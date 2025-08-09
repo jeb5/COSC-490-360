@@ -21,10 +21,9 @@ def getFrameOutputVectors(output_width, output_height, device):
 def remapping360_torch(image_width, image_height, yaw, pitch, roll, focal_length, output_vectors):
   # This function no longer uses flattening (Which can result in too-long vectors with lengths over the integer limit)
   # Also the A[mask] = B[mask] pattern is no longer used, as it occasionally results unreproducible errors
-  toRad = torch.pi / 180
 
   half_image_width, half_image_height = image_width / 2, image_height / 2
-  camera_rotation_matrix = (Ry(-yaw * toRad) @ Rx(-pitch * toRad) @ Rz(-roll * toRad)).to(output_vectors.device)
+  camera_rotation_matrix = (Ry(-yaw) @ Rx(-pitch) @ Rz(-roll)).to(output_vectors.device)
   # Pitch and yaw negated because image coordinates are (0,0) in top-left corner
 
   v_transformed = torch.einsum('hwc, cd -> hwd', output_vectors, camera_rotation_matrix)

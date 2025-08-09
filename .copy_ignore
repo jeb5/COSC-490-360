@@ -1,6 +1,6 @@
-/output/
+/inputs*
+!/inputs1
 /temp/
-/large_inputs/
 *.egg-info
 **/.DS_Store
 **/__pycache__/

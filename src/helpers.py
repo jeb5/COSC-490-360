@@ -8,6 +8,7 @@ import torchvision
 import matplotlib.font_manager as fm
 import matplotlib.pyplot as plt
 import os
+import progressbar as pb
 
 
 # 100
@@ -260,3 +261,24 @@ def get_sequence(n, first_consecutive, max):
 
   sequence = [f(i + 1, first_consecutive, n, max) for i in range(n)]
   return sequence
+
+
+class ProcessContext:
+  def __init__(self, max_value, prefix_widgets, swallow_keyboard_interrupts=True):
+    self.bar = pb.ProgressBar(
+      max_value=max_value,
+      widgets=prefix_widgets + [" ", pb.GranularBar(), " ", pb.ETA()],
+      redirect_stdout=True,
+      redirect_stderr=True,
+    )
+    self.swallow_keyboard_interrupts = swallow_keyboard_interrupts
+
+  def __enter__(self):
+    return self.bar
+
+  def __exit__(self, exc_type, exc_value, traceback):
+    self.bar.finish(dirty=True)
+    if exc_type is KeyboardInterrupt and self.swallow_keyboard_interrupts:
+      print("KeyboardInterrupt. Cancelling...")
+      return True  # Suppress the exception
+    return False

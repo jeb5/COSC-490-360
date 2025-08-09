@@ -3,12 +3,12 @@ import tempfile
 import subprocess
 import shutil
 import signal
-import sys
 import helpers
 import spatialmedia
 import spatialmedia.metadata_utils
 import line_profiler
 import threading
+import atexit
 
 
 class VideoWriter:
@@ -68,11 +68,8 @@ class VideoWriter:
     self.closed = False
     self.dirty = False
 
-    def cleanup_handler(signum, frame):
-      self.__cleanup__()
-      sys.exit(0)
-    signal.signal(signal.SIGINT, cleanup_handler)
-    signal.signal(signal.SIGTERM, cleanup_handler)
+    # If save_video is never called, cleanup the temp directory when the program exits
+    atexit.register(self.__cleanup__)
 
   def __enter__(self):
     return self

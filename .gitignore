@@ -1,9 +1,8 @@
-/output/
-/input/
+/inputs*
 /temp/
-/large_inputs/
 *.egg-info
 **/.DS_Store
 **/__pycache__/
 *.blend
 *.blend1
+*.cache
