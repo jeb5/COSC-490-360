@@ -18,13 +18,12 @@ def getFrameOutputVectors(output_width, output_height, device):
 
 
 @line_profiler.profile
-def remapping360_torch(image_width, image_height, yaw, pitch, roll, focal_length, output_vectors):
+def remapping360_torch(image_width, image_height, rotation, focal_length, output_vectors):
   # This function no longer uses flattening (Which can result in too-long vectors with lengths over the integer limit)
   # Also the A[mask] = B[mask] pattern is no longer used, as it occasionally results unreproducible errors
 
-  half_image_width, half_image_height = image_width / 2, image_height / 2
+  yaw, pitch, roll = rotation.as_euler("ZXY")
   camera_rotation_matrix = (Ry(-yaw) @ Rx(-pitch) @ Rz(-roll)).to(output_vectors.device)
-  # Pitch and yaw negated because image coordinates are (0,0) in top-left corner
 
   v_transformed = torch.einsum('hwc, cd -> hwd', output_vectors, camera_rotation_matrix)
   v_transformed[:, :, 1] = -v_transformed[:, :, 1]  # Flip Y axis
@@ -33,8 +32,8 @@ def remapping360_torch(image_width, image_height, yaw, pitch, roll, focal_length
   v_transformed *= focal_length / v_transformed[:, :, 2:3]
   projected = valid_mask * v_transformed + (1 - valid_mask) * -100000
 
-  mapX = projected[:, :, 0] + half_image_width
-  mapY = projected[:, :, 1] + half_image_height
+  mapX = projected[:, :, 0] + (image_width / 2)
+  mapY = projected[:, :, 1] + (image_height / 2)
 
   # return mapX.cpu().numpy(), mapY.cpu().numpy()
 

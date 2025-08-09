@@ -111,3 +111,8 @@ class DataManager:
       f.write("frame_number,pitch,roll,yaw\n")
       for frame_number, (pitch, roll, yaw) in enumerate(orientations):
         f.write(f"{frame_number},{pitch},{roll},{yaw}\n")
+
+  def save_image(self, image, filename):
+    output_path = os.path.join(self.output_dir, filename)
+    cv.imwrite(output_path, image)
+    print(f"Saved image to {output_path}")

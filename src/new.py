@@ -3,12 +3,13 @@ import math
 from DataManager import DataManager
 import cv2 as cv
 import torch
-
+from FeatureDetector import FeatureManager
 import helpers
 from helpers import ProcessContext
 import remap
 import remap_360
 import progressbar as pb
+from orientation_estimation import rotation_chaining, sliding_window, overlapping_windows
 
 
 def main(args):
@@ -17,31 +18,61 @@ def main(args):
   estimated_orientations = dm.get_inertials() if args.use_inertials else estimate_orientations(dm, args)
 
   if args.produce_360:
-    generate_equirectangular_video(dm, estimated_orientations, args)
+    generate_equirectangular_video(dm, estimated_orientations, args.output_scale)
+
+  if args.produce_debug and args.use_inertials:
+    output_estimation_information(dm, estimated_orientations, args.show_plot)
 
 
 def estimate_orientations(dm, args):
-  pass
+  feature_manager = FeatureManager(dm, "SIFT", 0.75, True, True, False)
+  if args.window_size == 1:
+    print("Using rotation chaining for orientation estimation.")
+    return rotation_chaining(dm, feature_manager)
+  elif args.window_strategy == "simple":
+    print("Using simple sliding window for orientation estimation.")
+    return sliding_window(dm, args.window_size, feature_manager)
+  elif args.window_strategy == "quadratic":
+    print("Using sliding window with quadratic lookback for orientation estimation.")
+    return sliding_window(dm, args.window_size, feature_manager, quadratic=True)
+  elif args.window_strategy == "overlapping":
+    print("Using sliding window with overlapping frames for orientation estimation.")
+    return overlapping_windows(dm, args.window_size, feature_manager)
 
+def output_estimation_information(dm, estimated_orientations, show_plot):
+  sum_deg_difference, count = 0.0, 0.0
+  for i in range(len(estimated_orientations)):
+    if estimated_orientations[i] is not None:
+      sum_deg_difference += (estimated_orientations[i].inv() * dm.get_inertial(i)).magnitude() * (180 / math.pi)
+      count += 1
+  print(f"Average estimated vs inertial difference: {sum_deg_difference / count:.2f} degrees")
+  print(f"Estimated orientation coverage: {100 * count / dm.get_sequence_length():.2f}%")
+  comparison_figure = helpers.generate_rotation_histories_plot(
+    [
+      {"name": "Estimated", "colour": "#42a7f5", "data": estimated_orientations},
+      {"name": "Inertial", "colour": "#f07d0a", "data": dm.get_inertials()},
+    ],
+    interactive=show_plot,
+  )
+  dm.save_image(comparison_figure, "comparison_figure.png")
 
-def generate_equirectangular_video(dm, orientations, args):
+def generate_equirectangular_video(dm, orientations, output_scale):
   device = helpers.get_device()
   intrinsic_matrix, _, (w, h) = dm.get_camera_info()
   focal_length = float(intrinsic_matrix[0][0] + intrinsic_matrix[1][1]) / 2
   vertical_fov = 2 * math.atan(h / (2 * focal_length)) * 180 / math.pi
-  out_h = int(h * (180 / vertical_fov) * args.output_scale)
+  out_h = int(h * (180 / vertical_fov) * output_scale)
   out_h = out_h // 2 * 2  # Ensure even height
   out_w = out_h * 2
 
   background = torch.zeros((out_h, out_w, 4), dtype=torch.float32, device=device)
   output_vectors = remap_360.getFrameOutputVectors(out_w, out_h, device)
 
-  N = 1
+  N = 0
   last_N_frames = []
 
   prefix_widgets = ["Generating 360 video | Frame ", pb.Counter(format="%(value)d"), "/", pb.FormatLabel("%(max_value)d")]
   with ProcessContext(prefix_widgets=prefix_widgets, max_value=len(orientations) - 1) as bar:
-    print()
     for frame_number in bar(range(len(orientations))):
       rotation = orientations[frame_number]
       frame = dm.get_frame(frame_number, undistort=True)
@@ -50,8 +81,7 @@ def generate_equirectangular_video(dm, orientations, args):
       frame = torch.from_numpy(frame).to(device).float()
 
       if rotation is not None:
-        yaw, pitch, roll = rotation.as_euler("ZXY")
-        map360 = remap_360.remapping360_torch(w, h, yaw, pitch, roll, focal_length, output_vectors)
+        map360 = remap_360.remapping360_torch(w, h, rotation, focal_length, output_vectors)
         dst = remap.torch_remap(map360, frame)
         background = helpers.add_transparent_image_torch(background, dst)
 
@@ -61,7 +91,6 @@ def generate_equirectangular_video(dm, orientations, args):
       output_frame = torch.mean(torch.stack(last_N_frames), dim=0)
       dm.write_360_frame(output_frame)
   dm.save_360_video()
-  print()
   print("Done.")
 
 
@@ -78,6 +107,7 @@ if __name__ == "__main__":
   parser.add_argument("--output_scale", type=float, default=1.0)
   parser.add_argument("--input_frame_interval", type=int, default=1)
   parser.add_argument("--input_frame_scale", type=float, default=1.0)
+  parser.add_argument("--show_plot", action="store_true")
 
   args = parser.parse_args()
   main(args)
