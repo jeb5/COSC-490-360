@@ -1,11 +1,11 @@
+import csv
 import cv2 as cv
 import os
 import json
+import torch
 import numpy as np
 from scipy.spatial.transform import Rotation as R
 from datetime import datetime
-
-import helpers
 from video_writer import VideoWriter
 
 
@@ -28,14 +28,25 @@ class DataManager:
     inertial_path = os.path.join(directory, "inertials.csv")
     if not os.path.exists(inertial_path):
       raise FileNotFoundError(f"Inertial data file not found: {inertial_path}")
-    self.inertial_rotations = [
-      R.from_euler("ZXY", [xyz[2], xyz[0], xyz[1]], degrees=True) for frame, xyz in helpers.rotations_from_csv(inertial_path)
-    ]
     self.num_frames = int(self.input_video.get(cv.CAP_PROP_FRAME_COUNT))
-    if self.num_frames != len(self.inertial_rotations):
-      raise ValueError(
-        f"Number of inertial frames ({len(self.inertial_rotations)}) does not match video frames ({self.num_frames})"
-      )
+
+    self.inertial_rotations = []
+    # Read all inertial data into a dict for fast lookup
+    inertial_data = {}
+    with open(inertial_path, "r") as f:
+      reader = csv.reader(f)
+      next(reader)  # Skip header
+      for row in reader:
+        frame_number = int(row[0])
+        pitch, roll, yaw = map(float, row[1:4])
+        inertial_data[frame_number] = (pitch, roll, yaw)
+
+    for frame_number in range(self.num_frames):
+      if frame_number in inertial_data:
+        pitch, roll, yaw = inertial_data[frame_number]
+        self.inertial_rotations.append(R.from_euler("ZXY", [yaw, pitch, roll], degrees=True))
+      else:
+        self.inertial_rotations.append(None)
 
     self.input_size = (
       int(self.input_video.get(cv.CAP_PROP_FRAME_WIDTH)),
@@ -67,7 +78,7 @@ class DataManager:
     ret, image = self.input_video.read()
     if not ret:
       raise Exception(f"Failed to read frame {real_frame_number} from video.")
-    if undistort:
+    if undistort and len(self.distortion_coefficients) > 0:
       image = cv.remap(image, self.m1, self.m2, cv.INTER_LINEAR)
     if self.input_frame_scale != 1.0:
       image = cv.resize(image, None, fx=self.input_frame_scale, fy=self.input_frame_scale, interpolation=cv.INTER_LINEAR)
@@ -97,7 +108,11 @@ class DataManager:
     if self.output_debug_video is None:
       frame_size = (frame.shape[1], frame.shape[0])
       self.output_debug_video = VideoWriter(self.debug_video_path, self.frame_rate, frame_size)
-    self.output_debug_video.write_frame(frame)
+    # if frame is a tensor
+    if isinstance(frame, torch.Tensor):
+      self.output_debug_video.write_frame(frame)
+    else:
+      self.output_debug_video.write_frame_opencv(frame)
 
   def save_debug_video(self):
     if self.output_debug_video is not None:
@@ -109,8 +124,10 @@ class DataManager:
   def write_orientations(self, orientations):
     with open(self.orientations_path, "w") as f:
       f.write("frame_number,pitch,roll,yaw\n")
-      for frame_number, (pitch, roll, yaw) in enumerate(orientations):
-        f.write(f"{frame_number},{pitch},{roll},{yaw}\n")
+      for frame_number, rotation in enumerate(orientations):
+        if rotation is not None:
+          yaw, pitch, roll = rotation.as_euler("ZXY", degrees=True)
+          f.write(f"{frame_number},{pitch},{roll},{yaw}\n")
 
   def save_image(self, image, filename):
     output_path = os.path.join(self.output_dir, filename)

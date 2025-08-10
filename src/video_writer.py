@@ -85,14 +85,16 @@ class VideoWriter:
   def did_write(self):
     return self.dirty
 
-  # Frame is a tensor of shape (H, W, C), BGRA
+  # Frame is a tensor of shape (H, W, C), BGRA or BGR
   @line_profiler.profile
   def write_frame(self, frame):
     if self.closed:
       raise ValueError("VideoWriter has already been closed.")
-    frame_updated = helpers.BGRAToBGRAlphaBlack_torch(frame)
-    frame_updated = frame_updated.byte().cpu().numpy()
-    self.ffmpeg_process.stdin.write(frame_updated.tobytes())
+    frame = frame.clone()
+    if frame.shape[-1] == 4:
+      frame = helpers.BGRAToBGRAlphaBlack_torch(frame)
+    frame = frame.byte().cpu().numpy()
+    self.ffmpeg_process.stdin.write(frame.tobytes())
     self.frame_number += 1
     self.dirty = True
 

@@ -6,8 +6,7 @@ import cv2 as cv
 import numpy as np
 from scipy.spatial.transform import Rotation as R
 
-
-def rotation_chaining(dm: DataManager, feature_manager: FeatureManager):
+def rotation_chaining(dm: DataManager, feature_manager: FeatureManager, produce_debug=False):
   estimated_orientations = []
 
   prefix_widgets = [
@@ -25,6 +24,8 @@ def rotation_chaining(dm: DataManager, feature_manager: FeatureManager):
     for frame_number in bar(range(1, dm.get_sequence_length())):
       features = feature_manager.detect_features(frame_number)
       matches = feature_manager.get_matches(previous_features, features)
+      if produce_debug:
+        dm.write_debug_frame(draw_matches(dm.get_frame(frame_number, undistort=True), matches, features))
       previous_features = features
       estimated_orientation_change = estimate_orientation_change(matches, intrinsic_matrix)
       if estimated_orientation_change is None:
@@ -61,6 +62,9 @@ def estimate_orientation_change(point_matches, intrinsic_matrix):
   inlier_points1 = points1[mask.ravel() == 1]
   inlier_points2 = points2[mask.ravel() == 1]
 
+  if len(inlier_points1) < 4:
+    return None
+
   H, _ = cv.findHomography(inlier_points1, inlier_points2, 0)  # Least squares refinement
 
   extracted_rotation = np.linalg.inv(intrinsic_matrix) @ H @ intrinsic_matrix
@@ -86,3 +90,19 @@ def convert_coordinate_system(rotation):
       [-rotation[0, 1], -rotation[2, 1], rotation[1, 1]],
     ]
   )
+
+def draw_matches(frame, matches, features):
+  pts1, pts2 = matches
+  kpts2, _ = features
+
+  output = cv.drawKeypoints(
+    frame,
+    kpts2,
+    None,
+    flags=cv.DRAW_MATCHES_FLAGS_DRAW_RICH_KEYPOINTS,
+  )
+  for i in range(len(pts1)):
+    pt1 = tuple(map(int, pts1[i]))
+    pt2 = tuple(map(int, pts2[i]))
+    cv.line(output, pt1, pt2, (0, 0, 255), 1)
+  return output

@@ -10,6 +10,7 @@ import remap
 import torch
 import line_profiler
 import argparse
+from scipy.spatial.transform import Rotation as R
 
 
 @line_profiler.profile
@@ -100,7 +101,8 @@ def main(args):
     if rotation is not None:
       pitch, roll, yaw = rotation
       print(f"Frame: {frame}, Pitch: {pitch:.2f}˚, Roll: {roll:.2f}˚, Yaw: {yaw:.2f}˚")
-      map360 = remap_360.remapping360_torch(in_w, in_h, yaw, pitch, roll, ideal_focal_length, output_vectors)
+      rot_obj = R.from_euler("ZXY", [yaw, pitch, roll], degrees=True)
+      map360 = remap_360.remapping360_torch(in_w, in_h, rot_obj, ideal_focal_length, output_vectors)
       dst = remap.torch_remap(map360, image)
       # dst = helpers.BGRAToBGRAlphaBlack_torch(dst)
       # dstcv = dst.cpu().numpy().astype("uint8")

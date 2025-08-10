@@ -4,21 +4,35 @@ import cv2 as cv
 
 
 def get_ORB_features(frame):
-  orb = cv.ORB_create()
+  orb = cv.ORB_create(nfeatures=2000)
   keypoints, descriptors = orb.detectAndCompute(frame, None)
   return keypoints, descriptors
 
 
 def get_SIFT_features(frame):
-  sift = cv.SIFT_create()
-  keypoints, descriptors = sift.detectAndCompute(frame, None)
-  return keypoints, descriptors
+  threshold_multiplier = 1.0
+  while True:
+    sift = cv.SIFT_create(
+      nfeatures=5000,
+      contrastThreshold=0.04 * threshold_multiplier,
+      edgeThreshold=10 * threshold_multiplier,
+    )
+    kp, des = sift.detectAndCompute(frame, None)
+    if len(kp) > 200 or threshold_multiplier < 0.15:
+      return kp, des
+    threshold_multiplier *= 0.8
 
 
 def get_SURF_features(frame):
-  surf = cv.xfeatures2d.SURF_create()
-  keypoints, descriptors = surf.detectAndCompute(frame, None)
-  return keypoints, descriptors
+  threshold_multiplier = 1.0
+  while True:
+    surf = cv.xfeatures2d.SURF_create(
+      hessianThreshold=200 * threshold_multiplier,
+    )
+    kp, des = surf.detectAndCompute(frame, None)
+    if len(kp) > 200 or threshold_multiplier < 0.15:
+      return kp, des
+    threshold_multiplier *= 0.8
 
 
 class FeatureManager:
@@ -33,6 +47,7 @@ class FeatureManager:
   ):
     self.data_manager = data_manager
     self.undistort_shortcut = undistort_shortcut
+    self.undistort_required = len(data_manager.distortion_coefficients) > 0
     assert feature_type in ["ORB", "SIFT", "SURF"], "Unsupported feature type"
     self.feature_type = feature_type
     self.feature_detector = {
@@ -46,9 +61,9 @@ class FeatureManager:
     self.cross_check = cross_check
 
   def detect_features(self, frame_number):
-    frame = self.data_manager.get_frame(frame_number, undistort=not self.undistort_shortcut)
+    frame = self.data_manager.get_frame(frame_number, undistort=(not self.undistort_shortcut and self.undistort_required))
     kps, des = self.feature_detector(frame)
-    if self.undistort_shortcut:
+    if self.undistort_shortcut and self.undistort_required:
       points = [kp.pt for kp in kps]
       undisorted_points = cv.undistortPoints(points, self.intrinsic_matrix, self.distortion_coefficients)
       for i, kp in enumerate(kps):
@@ -61,7 +76,7 @@ class FeatureManager:
 
     matcher = None
     if self.feature_type == "ORB":
-      matcher = cv.BFMatcher(cv.NORM_HAMMING, crossCheck=self.cross_check)
+      matcher = cv.BFMatcher(cv.NORM_HAMMING)
     elif self.feature_type in ["SIFT", "SURF"]:
       # For SIFT and SURF, we use FLANN-based matcher
       index_params = dict(algorithm=1, trees=5)
@@ -77,8 +92,8 @@ class FeatureManager:
         if m.distance < self.ratio_test_threshold * n.distance:
           matches.append(m)
 
-    if self.cross_check and self.feature_type != "ORB":
-      # Filter out matches which are not symmetric (The FLANN matcher does not support cross-checking out of the box)
+    if self.cross_check:
+      # Filter out matches which are not symmetric
       all_matches_21 = matcher.knnMatch(des2, des1, k=2)
       reverse_map = {}
       for matchPairs in all_matches_21:

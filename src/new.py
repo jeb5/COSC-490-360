@@ -5,6 +5,7 @@ import cv2 as cv
 import torch
 from FeatureDetector import FeatureManager
 import helpers
+import angle_estimation_helpers
 from helpers import ProcessContext
 import remap
 import remap_360
@@ -20,24 +21,31 @@ def main(args):
   if args.produce_360:
     generate_equirectangular_video(dm, estimated_orientations, args.output_scale)
 
-  if args.produce_debug and args.use_inertials:
+  if args.produce_debug and not args.use_inertials:
     output_estimation_information(dm, estimated_orientations, args.show_plot)
+
+  if not args.use_inertials:
+    dm.write_orientations(estimated_orientations)
 
 
 def estimate_orientations(dm, args):
-  feature_manager = FeatureManager(dm, "SIFT", 0.75, True, True, False)
+  feature_manager = FeatureManager(dm, "ORB", 0.75, True, True, True)
+  orientations = None
   if args.window_size == 1:
     print("Using rotation chaining for orientation estimation.")
-    return rotation_chaining(dm, feature_manager)
+    orientations = rotation_chaining(dm, feature_manager, args.produce_debug)
   elif args.window_strategy == "simple":
     print("Using simple sliding window for orientation estimation.")
-    return sliding_window(dm, args.window_size, feature_manager)
+    orientations = sliding_window(dm, args.window_size, feature_manager)
   elif args.window_strategy == "quadratic":
     print("Using sliding window with quadratic lookback for orientation estimation.")
-    return sliding_window(dm, args.window_size, feature_manager, quadratic=True)
+    orientations = sliding_window(dm, args.window_size, feature_manager, quadratic=True)
   elif args.window_strategy == "overlapping":
     print("Using sliding window with overlapping frames for orientation estimation.")
-    return overlapping_windows(dm, args.window_size, feature_manager)
+    orientations = overlapping_windows(dm, args.window_size, feature_manager)
+  if args.produce_debug:
+    dm.save_debug_video()
+  return orientations
 
 def output_estimation_information(dm, estimated_orientations, show_plot):
   sum_deg_difference, count = 0.0, 0.0
@@ -47,10 +55,14 @@ def output_estimation_information(dm, estimated_orientations, show_plot):
       count += 1
   print(f"Average estimated vs inertial difference: {sum_deg_difference / count:.2f} degrees")
   print(f"Estimated orientation coverage: {100 * count / dm.get_sequence_length():.2f}%")
-  comparison_figure = helpers.generate_rotation_histories_plot(
+  comparison_figure = angle_estimation_helpers.generate_rotation_histories_plot(
     [
-      {"name": "Estimated", "colour": "#42a7f5", "data": estimated_orientations},
-      {"name": "Inertial", "colour": "#f07d0a", "data": dm.get_inertials()},
+      {
+        "name": "Estimated",
+        "colour": "#42a7f5",
+        "data": [None if rot is None else rot.as_matrix() for rot in estimated_orientations],
+      },
+      {"name": "Inertial", "colour": "#f07d0a", "data": [rot.as_matrix() for rot in dm.get_inertials()]},
     ],
     interactive=show_plot,
   )
