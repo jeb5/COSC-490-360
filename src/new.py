@@ -18,18 +18,18 @@ def main(args):
 
   estimated_orientations = dm.get_inertials() if args.use_inertials else estimate_orientations(dm, args)
 
-  if args.produce_360:
-    generate_equirectangular_video(dm, estimated_orientations, args.output_scale)
+  if not args.use_inertials:
+    dm.write_orientations(estimated_orientations)
 
   if args.produce_debug and not args.use_inertials:
     output_estimation_information(dm, estimated_orientations, args.show_plot)
 
-  if not args.use_inertials:
-    dm.write_orientations(estimated_orientations)
+  if args.produce_360:
+    generate_equirectangular_video(dm, estimated_orientations, args.output_scale)
 
 
 def estimate_orientations(dm, args):
-  feature_manager = FeatureManager(dm, "ORB", 0.75, True, True, True)
+  feature_manager = FeatureManager(dm, "SIFT", 0.75, True, True, True)
   orientations = None
   if args.window_size == 1:
     print("Using rotation chaining for orientation estimation.")

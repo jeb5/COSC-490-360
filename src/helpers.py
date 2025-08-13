@@ -278,6 +278,7 @@ class ProcessContext:
 
   def __exit__(self, exc_type, exc_value, traceback):
     self.bar.finish(dirty=True)
+    print()
     if exc_type is KeyboardInterrupt and self.swallow_keyboard_interrupts:
       print("KeyboardInterrupt. Cancelling...")
       return True  # Suppress the exception

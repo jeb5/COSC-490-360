@@ -349,7 +349,7 @@ def solve_rotations(cameraMatrix, inertial_rotations, input_video, start_frame, 
   z2 = torch.from_numpy(Vt[-2]).float()
   z3 = torch.from_numpy(Vt[-3]).float()
 
-  rotations = torch.stack([z1, z2, z3], dim=1).vsplit(m)
+  rotations = torch.stack([z1, z2, z3], axis=1).vsplit(m)
   initial_correction = None
   visual_rotations = []
   for i in range(len(rotations)):

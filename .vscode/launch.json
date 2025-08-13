@@ -1,22 +1,41 @@
 {
 	"configurations": [
-		{
-			"name": "Python Debug Angle Estimation",
-			"type": "debugpy",
-			"request": "launch",
-			"program": "src/angle_estimation.py",
-			"console": "integratedTerminal",
-			"cwd": "${workspaceFolder}",
-			"args": ["input/balloon_sample", "--use_features_cache", "--use_matches_cache"]
-		},
-		{
-			"name": "Python Debug 360 Processing",
-			"type": "debugpy",
-			"request": "launch",
-			"program": "src/360.py",
-			"console": "integratedTerminal",
-			"cwd": "${workspaceFolder}",
-			"args": ["input/balloon_sample", "visual", "--scale", "0.5"]
-		}
-	]
+    {
+      "name": "Python Debug Angle Estimation",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "src/angle_estimation.py",
+      "console": "integratedTerminal",
+      "cwd": "${workspaceFolder}",
+      "args": ["input/balloon_sample", "--use_features_cache", "--use_matches_cache"]
+    },
+    {
+      "name": "Python Debug 360 Processing",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "src/360.py",
+      "console": "integratedTerminal",
+      "cwd": "${workspaceFolder}",
+      "args": ["input/balloon_sample", "visual", "--scale", "0.5"]
+    },
+    {
+      "name": "Python Debug New Processing",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "src/new.py",
+      "console": "integratedTerminal",
+      "cwd": "${workspaceFolder}",
+      "args": [
+        "inputs3/synthetic1",
+        "--produce_360",
+        "--output_scale",
+        "0.5",
+        "--window_size",
+        "4",
+        "--produce_debug",
+        "--window_strategy",
+        "overlapping"
+      ]
+    }
+  ]
 }
