@@ -35,12 +35,15 @@ def get_SURF_features(frame):
     threshold_multiplier *= 0.8
 
 
+MAX_FEATURE_CACHE_SIZE = 1000
+
+
 class FeatureManager:
   def __init__(
     self,
     data_manager: DataManager,
     feature_type,
-    ratio_test_threshold=0.75,
+    ratio_test_threshold=0.7,
     orientation_filter=True,
     cross_check=False,
     undistort_shortcut=True,
@@ -59,8 +62,13 @@ class FeatureManager:
     self.ratio_test_threshold = ratio_test_threshold
     self.orientation_filter = orientation_filter
     self.cross_check = cross_check
+    self.cached_features = {}
+    self.cache_expiration_queue = []
 
   def detect_features(self, frame_number):
+    if frame_number in self.cached_features:
+      return self.cached_features[frame_number]
+
     frame = self.data_manager.get_frame(frame_number, undistort=(not self.undistort_shortcut and self.undistort_required))
     kps, des = self.feature_detector(frame)
     if self.undistort_shortcut and self.undistort_required:
@@ -68,6 +76,13 @@ class FeatureManager:
       undisorted_points = cv.undistortPoints(points, self.intrinsic_matrix, self.distortion_coefficients)
       for i, kp in enumerate(kps):
         kp.pt = undisorted_points[i]
+
+    self.cached_features[frame_number] = (kps, des)
+    self.cache_expiration_queue.append(frame_number)
+    if len(self.cached_features) >= MAX_FEATURE_CACHE_SIZE:
+      oldest_frame = self.cache_expiration_queue.pop(0)
+      del self.cached_features[oldest_frame]
+
     return kps, des
 
   def get_matches(self, features1, features2):

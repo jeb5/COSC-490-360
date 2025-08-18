@@ -2,7 +2,6 @@
 import tempfile
 import subprocess
 import shutil
-import signal
 import helpers
 import spatialmedia
 import spatialmedia.metadata_utils
@@ -126,5 +125,8 @@ class VideoWriter:
 def addSphericalMetadata(input_path, output_path):
   metadata = spatialmedia.metadata_utils.Metadata()
   metadata.video = spatialmedia.metadata_utils.generate_spherical_xml()
-  def logging(message): print(message)
+
+  def logging(message):
+    print(message)
+
   spatialmedia.metadata_utils.inject_metadata(input_path, output_path, metadata, logging)

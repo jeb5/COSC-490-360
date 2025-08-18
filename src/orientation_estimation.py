@@ -1,7 +1,7 @@
 import math
-import os
 from DataManager import DataManager
-from FeatureDetector import FeatureManager
+from FeatureManager import FeatureManager
+from ObservationManager import ObservationManager
 from helpers import ProcessContext
 import progressbar as pb
 import cv2 as cv
@@ -50,8 +50,12 @@ def rotation_chaining(dm: DataManager, feature_manager: FeatureManager, produce_
 
 
 def sliding_window(dm, window_size, feature_manager, quadratic=False):
-  MAX_CACHE = 100
-  n = dm.get_sequence_length()
+  intrinsic_matrix, _, _ = dm.get_camera_info()
+
+  def orientation_estimation_func(matches):
+    return estimate_orientation_change(matches, intrinsic_matrix)
+
+  observation_manager = ObservationManager(feature_manager, is_valid_estimation, orientation_estimation_func)
 
   # if os.path.exists("temp/matches.txt"):
   #   print("Loading matches from temp/matches.txt")
@@ -63,93 +67,155 @@ def sliding_window(dm, window_size, feature_manager, quadratic=False):
   #       rotation = R.from_matrix(np.array(eval(rotation)))
   #       relative_rotations.append((i, j, rotation))
   # else:
-  intrinsic_matrix, _, _ = dm.get_camera_info()
   back_sequence = helpers.get_sequence(window_size, window_size // 3, 3000) if quadratic else range(1, window_size + 1)
-  loop_states = []
-  for i in range(n):
-    for j in (i - x for x in back_sequence):
-      if j >= 0:
-        loop_states.append((i, j))
-
-  cached_features = {}
-  feature_cache_queue = []
+  frame_pairs = []
+  for j in range(dm.get_sequence_length()):
+    for i in (j - x for x in back_sequence):
+      if i >= 0:
+        frame_pairs.append((i, j))
 
   prefix_widgets = [f"Sliding window matching {'(quadratic) ' if quadratic else ''}"]
-
   relative_rotations = []
 
-  with ProcessContext(prefix_widgets=prefix_widgets, max_value=len(loop_states)) as bar:
-    for i, j in bar(loop_states):
-      for k in [i, j]:
-        if k not in cached_features:
-          cached_features[k] = feature_manager.detect_features(k)
-          feature_cache_queue.append(k)
-        if len(feature_cache_queue) > MAX_CACHE:
-          del cached_features[feature_cache_queue.pop(0)]
-      matches = feature_manager.get_matches(cached_features[i], cached_features[j])
-      estimated_orientation_change, estimation_info = estimate_orientation_change(matches, intrinsic_matrix)
-      if is_valid_estimation(estimation_info):
-        relative_rotations.append((i, j, estimated_orientation_change))
-    cached_features.clear()
+  with ProcessContext(prefix_widgets=prefix_widgets, max_value=len(frame_pairs)) as bar:
+    relation_image = np.zeros((dm.get_sequence_length(), dm.get_sequence_length(), 3), dtype=np.float32)
 
-    # print("Serializing matches to temp/matches.txt")
-    # with open("temp/matches.txt", "w") as f:
-    #   for i, j, rotation in relative_rotations:
-    #     f.write(f"{i},{j},{rotation.as_matrix().tolist()}\n")
+    # for observation in bar(observation_manager.get_observations(frame_pairs)):
+    for observation in bar(observation_manager.get_observations_in_window(0, dm.get_sequence_length())):
+      relative_rotations.append(observation)
+      i, j, rotation = observation
+      inertial_ground_truth = dm.get_inertial(i).inv() * dm.get_inertial(j)
+      difference = (rotation.inv() * inertial_ground_truth).magnitude() * (180 / np.pi)
+      relation_image[i, j, 0] = min(difference * 1.2, 1.0)
+      relation_image[i, j, 1] = 1
 
-  estimated_orientations = solve_absolute_orientations(relative_rotations, n, 0)
-  correction_matrix = dm.get_inertial(0) * estimated_orientations[0].inv()
-  estimated_orientations = [correction_matrix * rot for rot in estimated_orientations]
+      if difference > 0.3:
+        print(f"Significant difference found between frames {i} and {j}: {difference:.2f}˚")
+        print(f"Inertial i: {dm.get_inertial(i).as_euler('ZXY', degrees=True)}")
+        print(f"Inertial j: {dm.get_inertial(j).as_euler('ZXY', degrees=True)}")
+        print(f"Ground truth: {inertial_ground_truth.as_euler('ZXY', degrees=True)}")
+        print(f"Estimate: {rotation.as_euler('ZXY', degrees=True)}")
+        # fi = feature_manager.detect_features(i)
+        # fj = feature_manager.detect_features(j)
+        # matches = feature_manager.get_matches(fi, fj)
+        # debug_pic = draw_matches(dm.get_frame(i, undistort=True), matches, fi)
+        # cv.imshow("Debug Matches", debug_pic)
+        # cv.waitKey(0)
+    # save relation_image
+    cv.imwrite("temp/relation_image.png", (relation_image * 255).astype(np.uint8))
+
+  # print("Serializing matches to temp/matches.txt")
+  # with open("temp/matches.txt", "w") as f:
+  #   for i, j, rotation in relative_rotations:
+  #     f.write(f"{i},{j},{rotation.as_matrix().tolist()}\n")
+
+  # estimated_orientations = solve_absolute_orientations(relative_rotations, dm.get_sequence_length(), 0)
+  estimated_orientations = solve_absolute_orientations_simple(relative_rotations, dm.get_sequence_length())
+
+  # correction_matrix = dm.get_inertial(0) * estimated_orientations[0].inv()
+  # estimated_orientations = [None if rot is None else correction_matrix * rot for rot in estimated_orientations]
   return estimated_orientations
 
 
 def overlapping_windows(dm, window_size, feature_manager):
-  # Implement overlapping windows logic here
-  MAX_CACHE = 100
+  assert window_size % 2 == 0, "Window size must be even for overlapping windows."
+
   intrinsic_matrix, _, _ = dm.get_camera_info()
 
-  assert window_size % 2 == 0, "Window size must be even for overlapping windows."
+  def orientation_estimation_func(matches):
+    return estimate_orientation_change(matches, intrinsic_matrix)
+
+  observation_manager = ObservationManager(feature_manager, is_valid_estimation, orientation_estimation_func)
+
   half_window = window_size // 2
   estimated_orientations = []
   num_blocks = math.ceil((2.0 * dm.get_sequence_length()) / window_size) - 1
-  cached_relative_orientations = {}
-  cached_features = {}
-  feature_cache_queue = []
   prefix_widgets = ["Overlapping windows matching | Block ", pb.Counter(format="%(value)d"), "/", pb.FormatLabel("%(max_value)d")]
   with ProcessContext(prefix_widgets=prefix_widgets, max_value=num_blocks) as bar:
     for block_num in bar(range(num_blocks)):
       start_frame = block_num * half_window
       block_length = min(window_size, dm.get_sequence_length() - start_frame)
-      relative_rotations_list = []
-      for i in range(0, block_length):
-        for j in range(0, i):
-          if (start_frame + i, start_frame + j) not in cached_relative_orientations:
-            if (start_frame + i) not in cached_features:
-              cached_features[start_frame + i] = feature_manager.detect_features(start_frame + i)
-              feature_cache_queue.append(start_frame + i)
-            if (start_frame + j) not in cached_features:
-              cached_features[start_frame + j] = feature_manager.detect_features(start_frame + j)
-              feature_cache_queue.append(start_frame + j)
-            if len(feature_cache_queue) > MAX_CACHE:
-              del cached_features[feature_cache_queue.pop(0)]
-            matches = feature_manager.get_matches(cached_features[start_frame + i], cached_features[start_frame + j])
-            estimated_orientation_change, estimation_info = estimate_orientation_change(matches, intrinsic_matrix)
-            if is_valid_estimation(estimation_info):
-              cached_relative_orientations[(start_frame + i, start_frame + j)] = estimated_orientation_change
-          estimated_orientation_change = cached_relative_orientations[(start_frame + i, start_frame + j)]
-          relative_rotations_list.append((i, j, estimated_orientation_change))
-      block_estimated_orientations = solve_absolute_orientations(relative_rotations_list, block_length, 0)
+      relative_rotations = []
+      for i, j, rotation in observation_manager.get_observations_in_window(start_frame, start_frame + block_length):
+        relative_rotations.append((i - start_frame, j - start_frame, rotation))
+
+        inertial_ground_truth = dm.get_inertial(i).inv() * dm.get_inertial(j)
+        difference = (rotation.inv() * inertial_ground_truth).magnitude() * (180 / np.pi)
+
+        # print(f"{i} -> {j}: {difference:.2f}˚")
+
+        if difference > 1:
+          print(f"Significant difference found between frames {i} and {j}: {difference:.2f}˚")
+        #   print(f"Inertial i: {dm.get_inertial(i).as_euler('ZXY', degrees=True)}")
+        #   print(f"Inertial j: {dm.get_inertial(j).as_euler('ZXY', degrees=True)}")
+        #   print(f"Ground truth: {inertial_ground_truth.as_euler('ZXY', degrees=True)}")
+        #   print(f"Estimate: {rotation.as_euler('ZXY', degrees=True)}")
+
+      # block_estimated_orientations = solve_absolute_orientations(relative_rotations, block_length, 0)
+      block_estimated_orientations = solve_absolute_orientations_simple(relative_rotations, block_length)
       block_correction_matrix = None
       if block_num == 0:
         block_correction_matrix = dm.get_inertial(0) * block_estimated_orientations[0].inv()
       else:
         block_correction_matrix = estimated_orientations[-half_window] * block_estimated_orientations[0].inv()
+        # block_correction_matrix = block_estimated_orientations[0].inv()
       block_estimated_orientations = [block_correction_matrix * rot for rot in block_estimated_orientations]
       if block_num == 0:
         estimated_orientations.extend(block_estimated_orientations)
       else:
         estimated_orientations.extend(block_estimated_orientations[half_window:])
+      # print(f"Block {block_num}: from {start_frame} to {start_frame + block_length}")
+      # estimated_orientations.extend(block_estimated_orientations[:half_window])
   return estimated_orientations
+
+
+def thing_that_works(dm, feature_manager):
+  intrinsic_matrix, _, _ = dm.get_camera_info()
+
+  def orientation_estimation_func(matches):
+    return estimate_orientation_change(matches, intrinsic_matrix)
+
+  observation_manager = ObservationManager(feature_manager, is_valid_estimation, orientation_estimation_func)
+
+  relative_rotations = []
+
+  for observation in observation_manager.get_observations_in_window(0, dm.get_sequence_length()):
+    relative_rotations.append(observation)
+
+  estimated_orientations = solve_absolute_orientations_simple(relative_rotations, dm.get_sequence_length())
+
+  correction_matrix = dm.get_inertial(0) * estimated_orientations[0].inv()
+  estimated_orientations = [None if rot is None else correction_matrix * rot for rot in estimated_orientations]
+  return estimated_orientations
+
+
+# def thing_that_does_not_work(dm, feature_manager):
+#   intrinsic_matrix, _, _ = dm.get_camera_info()
+
+#   def orientation_estimation_func(matches):
+#     return estimate_orientation_change(matches, intrinsic_matrix)
+
+#   observation_manager = ObservationManager(feature_manager, is_valid_estimation, orientation_estimation_func)
+
+#   estimated_orientations = []
+#   relative_rotations = []
+#   # for i, j, rotation in observation_manager.get_observations_in_window(0, 40):
+#   #   pass
+#   # relative_rotations.append((i, j, rotation))
+#   # block_estimated_orientations = solve_absolute_orientations_simple(relative_rotations, 40)
+#   # estimated_orientations.extend(block_estimated_orientations[:20])
+
+#   for i, j, rotation in observation_manager.get_observations_in_window(20, 60):
+#     pass
+
+#   relative_rotations = []
+#   for i, j, rotation in observation_manager.get_observations_in_window(20, 60):
+#     relative_rotations.append((i - 20, j - 20, rotation))
+
+#   block_estimated_orientations = solve_absolute_orientations_simple(relative_rotations, 40)
+#   estimated_orientations.extend(block_estimated_orientations[:20])
+
+#   return estimated_orientations
 
 
 def estimate_orientation_change(point_matches, intrinsic_matrix):
@@ -169,11 +235,7 @@ def estimate_orientation_change(point_matches, intrinsic_matrix):
   H, _ = cv.findHomography(inlier_points1, inlier_points2, 0)  # Least squares refinement
 
   extracted_rotation = np.linalg.inv(intrinsic_matrix) @ H @ intrinsic_matrix
-  orthonormalized_rotation = orthonormalize(extracted_rotation)
-
-  if np.linalg.det(orthonormalized_rotation) < 0:
-    # TODO: Just flip the sign of one of the columns?
-    return None, None
+  orthonormalized_rotation = project_to_so3(extracted_rotation)
 
   rotation = convert_coordinate_system(orthonormalized_rotation)
   rotation = R.from_matrix(rotation)
@@ -181,6 +243,7 @@ def estimate_orientation_change(point_matches, intrinsic_matrix):
   estimation_info = {
     "inliers": len(inlier_points1),
     "angle_change": rotation.magnitude() * (180 / np.pi),
+    "inliers_dice": (2 * len(inlier_points1)) / (len(points1) + len(points2)),
   }
 
   return rotation, estimation_info
@@ -194,6 +257,7 @@ def convert_coordinate_system(rotation):
       [-rotation[0, 1], -rotation[2, 1], rotation[1, 1]],
     ]
   )
+
 
 def draw_matches(frame, matches, features):
   pts1, pts2 = matches
@@ -211,51 +275,77 @@ def draw_matches(frame, matches, features):
     cv.line(output, pt1, pt2, (0, 0, 255), 1)
   return output
 
-def orthonormalize(rotation):
-  U, _, Vt = np.linalg.svd(rotation)
-  D = np.diag([1.0, 1.0, np.linalg.det(U @ Vt)])
-  R = U @ D @ Vt
-  return R
-
 
 def is_valid_estimation(estimation_info):
   if estimation_info is None:
     return False
-  if estimation_info["inliers"] < 10:
+  if estimation_info["inliers"] < 25:
     return False
-  if estimation_info["angle_change"] > 70:
+  if estimation_info["angle_change"] > 40:
     return False
+  # if estimation_info["inliers_dice"] < 0.05:
+  #   return False
   return True
 
 
 def solve_absolute_orientations(observed_relative_rotations, n, critical_group_index):
-  G = nx.Graph()
-  for i, j, observed_rotation in observed_relative_rotations:
-    G.add_edge(i, j)
+  # G = nx.Graph()
+  # for i, j, observed_rotation in observed_relative_rotations:
+  #   G.add_edge(i, j)
 
-  critical_group = list(nx.node_connected_component(G, critical_group_index))
-  if len(critical_group) == 0:
-    return [None] * n
-  connected_matches = [
-    (i, j, observed_rotation)
-    for i, j, observed_rotation in observed_relative_rotations
-    if i in critical_group and j in critical_group
-  ]
-  mask = np.zeros((n,), dtype=bool)
-  mask[critical_group] = True
+  # critical_group = list(nx.node_connected_component(G, critical_group_index))
+  # if len(critical_group) == 0:
+  #   return [None] * n
+  # connected_matches = [
+  #   (i, j, observed_rotation)
+  #   for i, j, observed_rotation in observed_relative_rotations
+  #   if i in critical_group and j in critical_group
+  # ]
+  # mask = np.zeros((n,), dtype=bool)
+  # mask[critical_group] = True
+  mask = np.ones((n,), dtype=bool)
+  connected_matches = observed_relative_rotations
 
   m = len(connected_matches)
   A = np.zeros((m * 3, n * 3))
   for idx, (i, j, observed_rotation) in enumerate(connected_matches):
-    A[idx * 3 : idx * 3 + 3, i * 3 : i * 3 + 3] = -observed_rotation.inv().as_matrix()
+    A[idx * 3 : idx * 3 + 3, i * 3 : i * 3 + 3] = -observed_rotation.as_matrix().T
     A[idx * 3 : idx * 3 + 3, j * 3 : j * 3 + 3] = np.eye(3)
 
   A_sp = scipy.sparse.csr_matrix(A)
   _, _, Vt = svds(A_sp, k=3, which="SM")
-  solution_matricies = np.stack([Vt[-1], Vt[-2], Vt[-3]], axis=1)
-  solution_matricies = np.vsplit(solution_matricies, n)
+  # _, _, Vt = np.linalg.svd(A)
+  # solution_matricies = np.stack([Vt[-1], Vt[-2], Vt[-3]], axis=1)
+  # solution_matricies = np.vsplit(solution_matricies, n)
+  # _, _, Vt = svds(A_sp, k=3, which="SM")
+  V = Vt.T  # shape (n*3, 3)
+  solution_matricies = V.reshape(n, 3, 3)
 
   estimated_orientations = [
-    R.from_matrix(orthonormalize(rotation)).inv() if mask[idx] else None for idx, rotation in enumerate(solution_matricies)
+    R.from_matrix(project_to_so3(rotation).T) if mask[idx] else None for idx, rotation in enumerate(solution_matricies)
   ]
   return estimated_orientations
+
+
+def solve_absolute_orientations_simple(observed_relative_rotations, n):
+  m = len(observed_relative_rotations)
+  A = np.zeros((m * 3, n * 3))
+  for idx, (i, j, observed_rotation) in enumerate(observed_relative_rotations):
+    A[idx * 3 : idx * 3 + 3, i * 3 : i * 3 + 3] = -observed_rotation.as_matrix().T
+    A[idx * 3 : idx * 3 + 3, j * 3 : j * 3 + 3] = np.eye(3)
+
+  A_sp = scipy.sparse.csr_matrix(A)
+  _, _, Vt = svds(A_sp, k=3, which="SM")
+  V = Vt.T
+  solution_matricies = V.reshape(n, 3, 3)
+
+  initial_correction = R.from_matrix(project_to_so3(solution_matricies[0]))
+  estimated_orientations = [initial_correction * R.from_matrix(project_to_so3(rotation).T) for rotation in solution_matricies]
+  return estimated_orientations
+
+
+def project_to_so3(matrix):
+  U, _, Vt = np.linalg.svd(matrix)
+  D = np.diag([1.0, 1.0, np.linalg.det(U @ Vt)])
+  R = U @ D @ Vt
+  return R

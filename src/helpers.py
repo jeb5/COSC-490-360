@@ -1,5 +1,3 @@
-import csv
-import json
 import math
 import numpy as np
 import cv2 as cv
@@ -7,31 +5,7 @@ import torch
 import torchvision
 import matplotlib.font_manager as fm
 import matplotlib.pyplot as plt
-import os
 import progressbar as pb
-
-
-# 100
-GOPRO_CAMERA = (
-	np.array([[1050.14, 0.0, 947.65],
-           [0.0, 1057.60, 532.78],
-            [0.0, 0.0, 1.0]]),
-	np.array([0.0459, 0.0144, 0.00425, -0.01387])
-)
-
-# 100mm = 1920 pixels
-# focal length = 1050 pixels, so focal length = 1050/1920 * 100 = 54.6875mm
-BLENDER_CAMERA = (
-	np.array([[1050, 0.0, 1920.0 / 2],
-           [0.0, 1050, 1080.0 / 2],
-           [0.0, 0.0, 1.0]]),
-	np.array([0.0, 0.0, 0.0, 0.0])
-)
-
-BLENDER_CAMERA_WITH_FISHEYE = (
-	BLENDER_CAMERA[0],
-  GOPRO_CAMERA[1]
-)
 
 font_path = 'src/assets/roboto_mono.ttf'
 fm.fontManager.addfont(font_path)
@@ -118,6 +92,7 @@ def BGRAToBGRAlphaBlack(image):
   bgr = cv.multiply(bgr.astype(float), alpha)
   return bgr.astype(np.uint8)
 
+
 # Image is BGRA [h, w, 4]
 
 
@@ -134,63 +109,12 @@ def BGRAToBGRAlphaBlack_torch(image):
   bgr = bgr * alpha
   return bgr
 
+
 def get_device():
-  device = torch.accelerator.current_accelerator().type if torch.accelerator.is_available() else 'cpu'
-  if device == 'cpu':
+  device = torch.accelerator.current_accelerator().type if torch.accelerator.is_available() else "cpu"
+  if device == "cpu":
     print("Warning: Using CPU for remapping, which may be slow")
   return device
-
-def rotations_from_csv(csv_path):
-  with open(csv_path, "r") as csvfile:
-    reader = csv.reader(csvfile)
-    # skip header
-    next(reader)
-    for row in reader:
-      frame_number = int(row[0])
-      pitch, roll, yaw = map(float, row[1:4])
-      yield (frame_number, (pitch, roll, yaw))
-
-
-def get_file_path_pack_dir(dir_path, type):
-  dir_path = dir_path.rstrip("/")
-  possible_postfixes = {
-    "video": [".mp4", ".mkv"],
-    "360_video": ["360.mp4", "360.mkv"],
-    "debug_video": [".debug.mp4", ".debug.mkv"],
-    "inertial": [".inertial.csv"],
-    "visual": [".visual.csv"],
-    "features_cache": [".features.cache"],
-    "matches_cache": [".matches.cache"],
-    "camera_info": [".caminfo.json"],
-  }
-  postfixes = tuple(possible_postfixes[type])
-  # All the postfixes that are not of type
-
-  if not os.path.exists(dir_path):
-    os.makedirs(dir_path)
-  else:
-    files_present = os.listdir(dir_path)
-    for file in files_present:
-      if file.lower().endswith(postfixes):
-        # So that videos don't match debug videos (Rather than come up with a more robust algorithm, this is my quick patch)
-        if type != "video" or not file.lower().endswith(
-          tuple(possible_postfixes["debug_video"] + possible_postfixes["360_video"])
-        ):
-          return os.path.join(dir_path, file)
-  dir_name = os.path.basename(dir_path)
-  file_name = f"{dir_name}{postfixes[0]}"
-  file_path = os.path.join(dir_path, file_name)
-  return file_path
-
-
-def load_camera_info(camera_info_path):
-  if not os.path.exists(camera_info_path):
-    raise FileNotFoundError(f"Camera info file not found: {camera_info_path}")
-  with open(camera_info_path, "r") as f:
-    camera_info = json.load(f)
-    intrinsic_matrix = np.array(camera_info["intrinsic_matrix"], dtype=np.float32)
-    distortion_coefficients = np.array(camera_info["distortion_coefficients"], dtype=np.float32)
-  return intrinsic_matrix, distortion_coefficients
 
 
 def apply_combined_vignette_alpha(image, circ_start_pct, circ_end_pct=None, rect_start_pct=0.0, rect_end_pct=None):
@@ -283,3 +207,111 @@ class ProcessContext:
       print("KeyboardInterrupt. Cancelling...")
       return True  # Suppress the exception
     return False
+
+
+def generate_rotation_histories_plot(rotation_histories, extra_text=None, extra_rot=None, interactive=False, legend=True):
+  text_fig = None
+  if extra_text is not None:
+    text_fig = plt.figure(figsize=(3, 1.4))
+    ax_text = text_fig.add_subplot()
+    ax_text.axis("off")
+    ax_text.text(
+      0,
+      1.0,
+      extra_text,
+      fontsize=12,
+      ha="left",
+      va="top",
+      wrap=True,
+      color="black",
+      transform=ax_text.transAxes,
+      fontfamily="monospace",
+      fontweight="bold",
+    )
+
+    text_fig.tight_layout()
+
+  # Main 3D plot
+  main_fig = plt.figure(figsize=(3, 3))
+  ax_main = main_fig.add_subplot(projection="3d")
+  ax_main.set_box_aspect(aspect=None, zoom=1)
+  for rotation_history in rotation_histories:
+    name = rotation_history["name"]
+    colour = rotation_history["colour"]
+    rotations = rotation_history["data"]
+    # Get mask to filter out None values
+    mask = [rot is not None for rot in rotations]
+    mask = np.array(mask)
+    rotations = [rot if rot is not None else np.eye(3) for rot in rotations]
+    rotations = np.array(rotations)
+    # Python version (old)
+    # vectors = [rotation @ np.array([0, 1, 0]) for rotation in rotations]
+    # Numpy version (new)
+    vectors = rotations @ np.array([0, 1, 0])
+    # Apply mask, setting None values to NaN
+    vectors = np.where(mask[:, None], vectors, np.nan)
+
+    vector_history = np.array(vectors)
+    xs, ys, zs = vector_history[:, 0], vector_history[:, 1], vector_history[:, 2]
+    ax_main.quiver(
+      0,
+      0,
+      0,
+      xs[-1],
+      ys[-1],
+      zs[-1],
+      length=1,
+      normalize=True,
+      color=colour,
+      arrow_length_ratio=0.2,
+    )
+    ax_main.plot(xs, ys, zs, c=colour, marker=".", label=name)
+
+  if extra_rot is not None:
+    extra_vector = extra_rot @ np.array([0, 1, 0])
+    ax_main.quiver(
+      0,
+      0,
+      0,
+      extra_vector[0],
+      extra_vector[1],
+      extra_vector[2],
+      length=1,
+      normalize=True,
+      color="red",
+      arrow_length_ratio=0.2,
+    )
+
+  ax_main.set_xlabel("X", labelpad=-10)
+  ax_main.set_ylabel("Y", labelpad=-10)
+  ax_main.set_zlabel("Z", labelpad=-10)
+  ax_main.set_xlim(-1, 1)
+  ax_main.set_ylim(-1, 1)
+  ax_main.set_zlim(-1, 1)
+  if legend:
+    ax_main.legend()
+  ax_main.set_xticklabels([])
+  ax_main.set_yticklabels([])
+  ax_main.set_zticklabels([])
+
+  if interactive:
+    main_fig.show()
+    plt.show(block=True)
+
+  main_image = figure_to_cv_image(main_fig)
+  if text_fig is None:
+    return main_image
+  text_image = figure_to_cv_image(text_fig)
+  return np.vstack((text_image, main_image))
+
+
+def figure_to_cv_image(fig):
+  fig.canvas.draw()
+  w, h = fig.canvas.get_width_height(physical=True)
+  plt.close(fig)
+  image = np.frombuffer(fig.canvas.tostring_argb(), dtype=np.uint8)
+  image = image.reshape(h, w, 4)
+  image = image[:, :, 1:4]
+  image = cv.cvtColor(image, cv.COLOR_RGB2BGR)
+
+  return image

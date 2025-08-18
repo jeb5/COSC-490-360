@@ -3,18 +3,23 @@ import math
 from DataManager import DataManager
 import cv2 as cv
 import torch
-from FeatureDetector import FeatureManager
+from FeatureManager import FeatureManager
 import helpers
-import angle_estimation_helpers
 from helpers import ProcessContext
 import remap
 import remap_360
 import progressbar as pb
-from orientation_estimation import rotation_chaining, sliding_window, overlapping_windows
+from orientation_estimation import (
+  rotation_chaining,
+  sliding_window,
+  overlapping_windows,
+  # thing_that_does_not_work,
+  # thing_that_works,
+)
 
 
 def main(args):
-  dm = DataManager(args.directory, args.input_frame_interval, args.input_frame_scale)
+  dm = DataManager(args.directory, args.input_frame_interval, args.input_frame_scale, args.start_frame, args.end_frame)
 
   estimated_orientations = dm.get_inertials() if args.use_inertials else estimate_orientations(dm, args)
 
@@ -45,6 +50,8 @@ def estimate_orientations(dm, args):
     orientations = overlapping_windows(dm, args.window_size, feature_manager)
   if args.produce_debug:
     dm.save_debug_video()
+  # orientations = thing_that_works(dm, feature_manager)
+  # orientations = thing_that_does_not_work(dm, feature_manager)
   return orientations
 
 def output_estimation_information(dm, estimated_orientations, show_plot):
@@ -55,7 +62,7 @@ def output_estimation_information(dm, estimated_orientations, show_plot):
       count += 1
   print(f"Average estimated vs inertial difference: {sum_deg_difference / count:.2f} degrees")
   print(f"Estimated orientation coverage: {100 * count / dm.get_sequence_length():.2f}%")
-  comparison_figure = angle_estimation_helpers.generate_rotation_histories_plot(
+  comparison_figure = helpers.generate_rotation_histories_plot(
     [
       {
         "name": "Estimated",
@@ -119,6 +126,8 @@ if __name__ == "__main__":
   parser.add_argument("--output_scale", type=float, default=1.0)
   parser.add_argument("--input_frame_interval", type=int, default=1)
   parser.add_argument("--input_frame_scale", type=float, default=1.0)
+  parser.add_argument("--start_frame", type=int, default=0)
+  parser.add_argument("--end_frame", type=int, default=None)
   parser.add_argument("--show_plot", action="store_true")
 
   args = parser.parse_args()

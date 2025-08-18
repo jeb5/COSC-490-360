@@ -1,6 +1,5 @@
 import math
 import torch
-import line_profiler
 
 def getFrameOutputVectors(output_width, output_height, device):
   y_angles = torch.linspace(-0.5, 0.5, output_height, device=device) * -torch.pi
@@ -17,7 +16,6 @@ def getFrameOutputVectors(output_width, output_height, device):
   return output_vectors
 
 
-@line_profiler.profile
 def remapping360_torch(image_width, image_height, rotation, focal_length, output_vectors):
   # This function no longer uses flattening (Which can result in too-long vectors with lengths over the integer limit)
   # Also the A[mask] = B[mask] pattern is no longer used, as it occasionally results unreproducible errors

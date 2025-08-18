@@ -6,11 +6,10 @@ import torch
 import numpy as np
 from scipy.spatial.transform import Rotation as R
 from datetime import datetime
-from video_writer import VideoWriter
-
+from VideoWriter import VideoWriter
 
 class DataManager:
-  def __init__(self, directory, input_frame_interval=1, input_frame_scale=1.0):
+  def __init__(self, directory, input_frame_interval=1, input_frame_scale=1.0, input_start_frame=0, input_end_frame=None):
     self.directory = directory
     self.input_frame_interval = input_frame_interval
     self.input_frame_scale = input_frame_scale
@@ -29,6 +28,9 @@ class DataManager:
     if not os.path.exists(inertial_path):
       raise FileNotFoundError(f"Inertial data file not found: {inertial_path}")
     self.num_frames = int(self.input_video.get(cv.CAP_PROP_FRAME_COUNT))
+    self.input_start_frame = input_start_frame
+    self.input_end_frame = input_end_frame if input_end_frame is not None else self.num_frames
+    self.num_frames = self.input_end_frame - self.input_start_frame
 
     self.inertial_rotations = []
     # Read all inertial data into a dict for fast lookup
@@ -41,7 +43,7 @@ class DataManager:
         pitch, roll, yaw = map(float, row[1:4])
         inertial_data[frame_number] = (pitch, roll, yaw)
 
-    for frame_number in range(self.num_frames):
+    for frame_number in range(self.input_start_frame, self.input_end_frame):
       if frame_number in inertial_data:
         pitch, roll, yaw = inertial_data[frame_number]
         self.inertial_rotations.append(R.from_euler("ZXY", [yaw, pitch, roll], degrees=True))
@@ -73,7 +75,7 @@ class DataManager:
     self.output_debug_video = None
 
   def get_frame(self, frame_number, undistort=False):
-    real_frame_number = frame_number * self.input_frame_interval
+    real_frame_number = frame_number * self.input_frame_interval + self.input_start_frame
     self.input_video.set(cv.CAP_PROP_POS_FRAMES, real_frame_number)
     ret, image = self.input_video.read()
     if not ret:
