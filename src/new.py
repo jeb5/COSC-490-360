@@ -13,6 +13,7 @@ from orientation_estimation import (
   rotation_chaining,
   sliding_window,
   overlapping_windows,
+  thing_that_does_not_work,
   # thing_that_does_not_work,
   # thing_that_works,
 )
@@ -36,22 +37,22 @@ def main(args):
 def estimate_orientations(dm, args):
   feature_manager = FeatureManager(dm, "SIFT", 0.75, True, True, True)
   orientations = None
-  if args.window_size == 1:
-    print("Using rotation chaining for orientation estimation.")
-    orientations = rotation_chaining(dm, feature_manager, args.produce_debug)
-  elif args.window_strategy == "simple":
-    print("Using simple sliding window for orientation estimation.")
-    orientations = sliding_window(dm, args.window_size, feature_manager)
-  elif args.window_strategy == "quadratic":
-    print("Using sliding window with quadratic lookback for orientation estimation.")
-    orientations = sliding_window(dm, args.window_size, feature_manager, quadratic=True)
-  elif args.window_strategy == "overlapping":
-    print("Using sliding window with overlapping frames for orientation estimation.")
-    orientations = overlapping_windows(dm, args.window_size, feature_manager)
-  if args.produce_debug:
-    dm.save_debug_video()
+  # if args.window_size == 1:
+  #   print("Using rotation chaining for orientation estimation.")
+  #   orientations = rotation_chaining(dm, feature_manager, args.produce_debug)
+  # elif args.window_strategy == "simple":
+  #   print("Using simple sliding window for orientation estimation.")
+  #   orientations = sliding_window(dm, args.window_size, feature_manager)
+  # elif args.window_strategy == "quadratic":
+  #   print("Using sliding window with quadratic lookback for orientation estimation.")
+  #   orientations = sliding_window(dm, args.window_size, feature_manager, quadratic=True)
+  # elif args.window_strategy == "overlapping":
+  #   print("Using sliding window with overlapping frames for orientation estimation.")
+  #   orientations = overlapping_windows(dm, args.window_size, feature_manager)
+  # if args.produce_debug:
+  #   dm.save_debug_video()
   # orientations = thing_that_works(dm, feature_manager)
-  # orientations = thing_that_does_not_work(dm, feature_manager)
+  orientations = thing_that_does_not_work(dm, feature_manager)
   return orientations
 
 def output_estimation_information(dm, estimated_orientations, show_plot):

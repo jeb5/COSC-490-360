@@ -80,8 +80,7 @@ def sliding_window(dm, window_size, feature_manager, quadratic=False):
   with ProcessContext(prefix_widgets=prefix_widgets, max_value=len(frame_pairs)) as bar:
     relation_image = np.zeros((dm.get_sequence_length(), dm.get_sequence_length(), 3), dtype=np.float32)
 
-    # for observation in bar(observation_manager.get_observations(frame_pairs)):
-    for observation in bar(observation_manager.get_observations_in_window(0, dm.get_sequence_length())):
+    for observation in bar(observation_manager.get_observations(frame_pairs)):
       relative_rotations.append(observation)
       i, j, rotation = observation
       inertial_ground_truth = dm.get_inertial(i).inv() * dm.get_inertial(j)
@@ -140,6 +139,7 @@ def overlapping_windows(dm, window_size, feature_manager):
         relative_rotations.append((i - start_frame, j - start_frame, rotation))
 
         inertial_ground_truth = dm.get_inertial(i).inv() * dm.get_inertial(j)
+        # relative_rotations.append((i - start_frame, j - start_frame, inertial_ground_truth))
         difference = (rotation.inv() * inertial_ground_truth).magnitude() * (180 / np.pi)
 
         # print(f"{i} -> {j}: {difference:.2f}˚")
@@ -152,7 +152,8 @@ def overlapping_windows(dm, window_size, feature_manager):
         #   print(f"Estimate: {rotation.as_euler('ZXY', degrees=True)}")
 
       # block_estimated_orientations = solve_absolute_orientations(relative_rotations, block_length, 0)
-      block_estimated_orientations = solve_absolute_orientations_simple(relative_rotations, block_length)
+      # block_estimated_orientations = solve_absolute_orientations_simple(relative_rotations, block_length)
+      block_estimated_orientations = solve_absolute_orientations_right(relative_rotations, block_length)
       block_correction_matrix = None
       if block_num == 0:
         block_correction_matrix = dm.get_inertial(0) * block_estimated_orientations[0].inv()
@@ -169,7 +170,27 @@ def overlapping_windows(dm, window_size, feature_manager):
   return estimated_orientations
 
 
-def thing_that_works(dm, feature_manager):
+# def thing_that_works(dm, feature_manager):
+#   intrinsic_matrix, _, _ = dm.get_camera_info()
+
+#   def orientation_estimation_func(matches):
+#     return estimate_orientation_change(matches, intrinsic_matrix)
+
+#   observation_manager = ObservationManager(feature_manager, is_valid_estimation, orientation_estimation_func)
+
+#   relative_rotations = []
+
+#   for observation in observation_manager.get_observations_in_window(0, dm.get_sequence_length()):
+#     relative_rotations.append(observation)
+
+#   estimated_orientations = solve_absolute_orientations_simple(relative_rotations, dm.get_sequence_length())
+
+#   correction_matrix = dm.get_inertial(0) * estimated_orientations[0].inv()
+#   estimated_orientations = [None if rot is None else correction_matrix * rot for rot in estimated_orientations]
+#   return estimated_orientations
+
+
+def thing_that_does_not_work(dm, feature_manager):
   intrinsic_matrix, _, _ = dm.get_camera_info()
 
   def orientation_estimation_func(matches):
@@ -178,44 +199,24 @@ def thing_that_works(dm, feature_manager):
   observation_manager = ObservationManager(feature_manager, is_valid_estimation, orientation_estimation_func)
 
   relative_rotations = []
+  # for i, j, rotation in observation_manager.get_observations_in_window(0, 40):
+  #   pass
+  # relative_rotations.append((i, j, rotation))
+  # block_estimated_orientations = solve_absolute_orientations_simple(relative_rotations, 40)
+  # estimated_orientations.extend(block_estimated_orientations[:20])
 
-  for observation in observation_manager.get_observations_in_window(0, dm.get_sequence_length()):
-    relative_rotations.append(observation)
+  cv.setRNGSeed(45)
+  relative_rotations = []
+  for i, j, rotation in observation_manager.get_observations_in_window(0, 50):
+    # for i in range(0, 121):
+    #   for j in range(0, i):
+    # Rj = Ri @ Rij
+    # Rij = dm.get_inertial(i).inv() * dm.get_inertial(j)
+    relative_rotations.append((i, j, rotation))
 
-  estimated_orientations = solve_absolute_orientations_simple(relative_rotations, dm.get_sequence_length())
+  estimated_orientations = solve_absolute_orientations_right(relative_rotations, 121)
 
-  correction_matrix = dm.get_inertial(0) * estimated_orientations[0].inv()
-  estimated_orientations = [None if rot is None else correction_matrix * rot for rot in estimated_orientations]
   return estimated_orientations
-
-
-# def thing_that_does_not_work(dm, feature_manager):
-#   intrinsic_matrix, _, _ = dm.get_camera_info()
-
-#   def orientation_estimation_func(matches):
-#     return estimate_orientation_change(matches, intrinsic_matrix)
-
-#   observation_manager = ObservationManager(feature_manager, is_valid_estimation, orientation_estimation_func)
-
-#   estimated_orientations = []
-#   relative_rotations = []
-#   # for i, j, rotation in observation_manager.get_observations_in_window(0, 40):
-#   #   pass
-#   # relative_rotations.append((i, j, rotation))
-#   # block_estimated_orientations = solve_absolute_orientations_simple(relative_rotations, 40)
-#   # estimated_orientations.extend(block_estimated_orientations[:20])
-
-#   for i, j, rotation in observation_manager.get_observations_in_window(20, 60):
-#     pass
-
-#   relative_rotations = []
-#   for i, j, rotation in observation_manager.get_observations_in_window(20, 60):
-#     relative_rotations.append((i - 20, j - 20, rotation))
-
-#   block_estimated_orientations = solve_absolute_orientations_simple(relative_rotations, 40)
-#   estimated_orientations.extend(block_estimated_orientations[:20])
-
-#   return estimated_orientations
 
 
 def estimate_orientation_change(point_matches, intrinsic_matrix):
@@ -279,7 +280,7 @@ def draw_matches(frame, matches, features):
 def is_valid_estimation(estimation_info):
   if estimation_info is None:
     return False
-  if estimation_info["inliers"] < 25:
+  if estimation_info["inliers"] < 20:
     return False
   if estimation_info["angle_change"] > 40:
     return False
@@ -331,21 +332,86 @@ def solve_absolute_orientations_simple(observed_relative_rotations, n):
   m = len(observed_relative_rotations)
   A = np.zeros((m * 3, n * 3))
   for idx, (i, j, observed_rotation) in enumerate(observed_relative_rotations):
-    A[idx * 3 : idx * 3 + 3, i * 3 : i * 3 + 3] = -observed_rotation.as_matrix().T
+    A[idx * 3 : idx * 3 + 3, i * 3 : i * 3 + 3] = -observed_rotation.as_matrix()
     A[idx * 3 : idx * 3 + 3, j * 3 : j * 3 + 3] = np.eye(3)
 
   A_sp = scipy.sparse.csr_matrix(A)
   _, _, Vt = svds(A_sp, k=3, which="SM")
   V = Vt.T
+
   solution_matricies = V.reshape(n, 3, 3)
 
-  initial_correction = R.from_matrix(project_to_so3(solution_matricies[0]))
-  estimated_orientations = [initial_correction * R.from_matrix(project_to_so3(rotation).T) for rotation in solution_matricies]
+  estimated_orientations = [project_to_so3(rot) for rot in solution_matricies]
+  correction = estimated_orientations[0].T
+  estimated_orientations = [R.from_matrix(correction @ rot) for rot in estimated_orientations]
   return estimated_orientations
 
 
-def project_to_so3(matrix):
-  U, _, Vt = np.linalg.svd(matrix)
-  D = np.diag([1.0, 1.0, np.linalg.det(U @ Vt)])
-  R = U @ D @ Vt
-  return R
+# def solve_absolute_orientations_right(observed_relative_rotations, n):
+#   m = len(observed_relative_rotations)
+#   A = np.zeros((m * 9, n * 9))
+#   for idx, (i, j, Rij) in enumerate(observed_relative_rotations):
+#     block = np.kron(Rij.as_matrix().T, np.eye(3))
+#     A[idx * 9 : idx * 9 + 9, i * 9 : i * 9 + 9] = -block
+#     A[idx * 9 : idx * 9 + 9, j * 9 : j * 9 + 9] = np.eye(9)
+
+#   # Solve smallest singular vectors
+#   A_sp = scipy.sparse.csr_matrix(A)
+#   _, _, Vt = svds(A_sp, k=9, which="SM")
+#   V = Vt.T
+
+#   solution_matrices = V.reshape(n, 3, 3)
+#   estimated_orientations = [project_to_so3(rot) for rot in solution_matrices]
+
+#   correction = estimated_orientations[0].T
+#   estimated_orientations = [R.from_matrix(correction @ rot) for rot in estimated_orientations]
+#   return estimated_orientations
+
+
+# def project_to_so3(matrix):
+#   U, _, Vt = np.linalg.svd(matrix)
+#   D = np.diag([1.0, 1.0, np.linalg.det(U @ Vt)])
+#   R = U @ D @ Vt
+#   return R
+
+
+def project_to_so3(M):
+  U, _, Vt = np.linalg.svd(M)
+  Rproj = U @ Vt
+  if np.linalg.det(Rproj) < 0:
+    U[:, -1] *= -1
+    Rproj = U @ Vt
+  return Rproj
+
+
+def solve_absolute_orientations_right(observed_relative_rotations, n):
+  m = len(observed_relative_rotations)
+  A = np.zeros((m * 9, n * 9))
+
+  for idx, (i, j, Rij) in enumerate(observed_relative_rotations):
+    Rij_mat = Rij.as_matrix()
+    block = -np.kron(Rij_mat.T, np.eye(3))
+    A[idx * 9 : idx * 9 + 9, i * 9 : i * 9 + 9] = block
+    A[idx * 9 : idx * 9 + 9, j * 9 : j * 9 + 9] = np.eye(9)
+
+  A_sp = scipy.sparse.csr_matrix(A)
+
+  # Find bottom-9 singular vectors (nullspace basis)
+  _, _, Vt = svds(A_sp, k=9, which="SM")
+  V = Vt.T  # shape (n*9, 9)
+
+  # Split into n candidate rotation matrices
+  solution_matrices = V.reshape(n, 9, 9)
+
+  # Heuristic: pick the block that looks like a rotation (closest to SO(3))
+  estimated_orientations = []
+  for mat in solution_matrices:
+    # pick one column block (there’s ambiguity up to rotation)
+    rot = mat[:, 0].reshape(3, 3, order="F")  # reshape into 3x3
+    estimated_orientations.append(project_to_so3(rot))
+
+  # Global correction: align first orientation to identity
+  correction = estimated_orientations[0].T
+  estimated_orientations = [R.from_matrix(correction @ rot) for rot in estimated_orientations]
+
+  return estimated_orientations
