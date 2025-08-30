@@ -113,10 +113,7 @@ def overlapping_windows(dm, window_size, feature_manager):
   observation_manager = ObservationManager(feature_manager, is_valid_estimation, orientation_estimation_func)
 
   half_window = window_size // 2
-  s = window_size // 4
-  t = half_window + s
   estimated_orientations = []
-  last_block = []
   num_blocks = math.ceil((2.0 * dm.get_sequence_length()) / window_size) - 1
   prefix_widgets = ["Overlapping windows matching | Block ", pb.Counter(format="%(value)d"), "/", pb.FormatLabel("%(max_value)d")]
   with ProcessContext(prefix_widgets=prefix_widgets, max_value=num_blocks) as bar:
@@ -127,34 +124,40 @@ def overlapping_windows(dm, window_size, feature_manager):
       for i, j, rotation in observation_manager.get_observations_in_window(start_frame, start_frame + block_length):
         relative_rotations.append((i - start_frame, j - start_frame, rotation.inv()))
 
-        inertial_ground_truth = dm.get_inertial(i).inv() * dm.get_inertial(j)
-        # relative_rotations.append((i - start_frame, j - start_frame, inertial_ground_truth))
-        difference = (rotation.inv() * inertial_ground_truth).magnitude() * (180 / np.pi)
-
-        # print(f"{i} -> {j}: {difference:.2f}˚")
-
-        if difference > 1:
-          print(f"Significant difference found between frames {i} and {j}: {difference:.2f}˚")
-        #   print(f"Inertial i: {dm.get_inertial(i).as_euler('ZXY', degrees=True)}")
-        #   print(f"Inertial j: {dm.get_inertial(j).as_euler('ZXY', degrees=True)}")
-        #   print(f"Ground truth: {inertial_ground_truth.as_euler('ZXY', degrees=True)}")
-        #   print(f"Estimate: {rotation.as_euler('ZXY', degrees=True)}")
-
-      block_estimated_orientations = solve_absolute_orientations(relative_rotations, block_length, 0)
+      block_rots = solve_absolute_orientations(relative_rotations, block_length, 0)
       block_correction_matrix = None
       if block_num == 0:
-        block_correction_matrix = dm.get_inertial(0) * block_estimated_orientations[0].inv()
+        block_correction_matrix = dm.get_inertial(0) * block_rots[0].inv()
       else:
-        block_correction_matrix = last_block[t] * block_estimated_orientations[s].inv()
-        # block_correction_matrix = block_estimated_orientations[0].inv()
-      block_estimated_orientations = [block_correction_matrix * rot for rot in block_estimated_orientations]
+        block_correction_matricies = []
+        for x in range(half_window):
+          previous_rot = estimated_orientations[-half_window + x]
+          current_block_rot = block_rots[x]
+          if previous_rot is not None and current_block_rot is not None:
+            block_correction_matricies.append(previous_rot * current_block_rot.inv())
+        if block_correction_matricies:
+          block_correction_matrix = R.concatenate(block_correction_matricies).mean()
+        else:
+          print(f"No overlap between blocks {block_num - 1} and {block_num}, stopping estimation.")
+          break
+      block_rots = [None if rot is None else block_correction_matrix * rot for rot in block_rots]
+
       if block_num == 0:
-        estimated_orientations.extend(block_estimated_orientations)
+        estimated_orientations.extend(block_rots)
       else:
-        estimated_orientations.extend(block_estimated_orientations[half_window:])
-      last_block = block_estimated_orientations
-      # print(f"Block {block_num}: from {start_frame} to {start_frame + block_length}")
-      # estimated_orientations.extend(block_estimated_orientations[:half_window])
+        for x in range(half_window):
+          previous_rot = estimated_orientations[-half_window + x]
+          current_rot = block_rots[x]
+          current_weight = (x + 1) / (half_window + 1)
+          new_rot = None
+          if previous_rot is None:
+            new_rot = current_rot
+          elif current_rot is None:
+            new_rot = previous_rot
+          else:
+            new_rot = R.concatenate([current_rot, previous_rot]).mean(weights=[current_weight, (1 - current_weight)])
+          estimated_orientations[-half_window + x] = new_rot
+        estimated_orientations.extend(block_rots[half_window:])
   return estimated_orientations
 
 
