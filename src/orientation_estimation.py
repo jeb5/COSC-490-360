@@ -57,7 +57,7 @@ def sliding_window(dm, window_size, feature_manager, quadratic=False):
   def orientation_estimation_func(matches):
     return estimate_orientation_change(matches, intrinsic_matrix)
 
-  observation_manager = ObservationManager(feature_manager, is_valid_estimation, orientation_estimation_func)
+  observation_manager = ObservationManager(feature_manager, is_valid_estimation, orientation_estimation_func, dm)
 
   back_sequence = helpers.get_sequence(window_size, window_size // 3, 3000) if quadratic else range(1, window_size + 1)
   frame_pairs = []
@@ -110,12 +110,13 @@ def overlapping_windows(dm, window_size, feature_manager):
   def orientation_estimation_func(matches):
     return estimate_orientation_change(matches, intrinsic_matrix)
 
-  observation_manager = ObservationManager(feature_manager, is_valid_estimation, orientation_estimation_func)
+  observation_manager = ObservationManager(feature_manager, is_valid_estimation, orientation_estimation_func, dm)
 
   half_window = window_size // 2
   estimated_orientations = []
   num_blocks = math.ceil((2.0 * dm.get_sequence_length()) / window_size) - 1
   prefix_widgets = ["Overlapping windows matching | Block ", pb.Counter(format="%(value)d"), "/", pb.FormatLabel("%(max_value)d")]
+  # TODO: Make process context allow for errors, and so current estimated_orientations can be returned
   with ProcessContext(prefix_widgets=prefix_widgets, max_value=num_blocks) as bar:
     for block_num in bar(range(num_blocks)):
       start_frame = block_num * half_window
@@ -158,6 +159,8 @@ def overlapping_windows(dm, window_size, feature_manager):
             new_rot = R.concatenate([current_rot, previous_rot]).mean(weights=[current_weight, (1 - current_weight)])
           estimated_orientations[-half_window + x] = new_rot
         estimated_orientations.extend(block_rots[half_window:])
+  # dm.save_image(observation_manager.generate_observation_image(), "observation_image.png")
+  observation_manager.show_interactive_observation_image()
   return estimated_orientations
 
 
@@ -165,7 +168,7 @@ def estimate_orientation_change(point_matches, intrinsic_matrix):
   points1, points2 = point_matches
   if len(points1) < 4:
     return None, None
-  H, mask = cv.findHomography(points1, points2, cv.USAC_MAGSAC, 0.25)
+  H, mask = cv.findHomography(points1, points2, cv.RANSAC, 3)
   if H is None:
     return None, None
 
@@ -187,6 +190,7 @@ def estimate_orientation_change(point_matches, intrinsic_matrix):
     "inliers": len(inlier_points1),
     "angle_change": rotation.magnitude() * (180 / np.pi),
     "inliers_dice": (2 * len(inlier_points1)) / (len(points1) + len(points2)),
+    "inlier_mask": mask.ravel(),
   }
 
   return rotation, estimation_info
@@ -262,8 +266,9 @@ def solve_absolute_orientations(observed_relative_rotations, n):
   rotations = np.stack(Vt, axis=1).reshape(n, 3, 3)
 
   rotations = [orthonormalize(rot).T if rot is not None else None for rot in rotations]
-  correction = rotations[0].T  # *Need* to correct matrices to fix det=-1
+  correction = rotations[critical_group[0]].T
   rotations = [R.from_matrix(correction @ rot) if rot is not None else None for rot in rotations]
+  rotations = [rot if mask[i] else None for i, rot in enumerate(rotations)]
   return rotations
 
 
