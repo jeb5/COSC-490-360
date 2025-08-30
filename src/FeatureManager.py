@@ -69,13 +69,15 @@ class FeatureManager:
     if frame_number in self.cached_features:
       return self.cached_features[frame_number]
 
-    frame = self.data_manager.get_frame(frame_number, undistort=(not self.undistort_shortcut and self.undistort_required))
+    frame = self.data_manager.get_frame(frame_number, undistort=(self.undistort_required and (not self.undistort_shortcut)))
     kps, des = self.feature_detector(frame)
-    if self.undistort_shortcut and self.undistort_required:
-      points = [kp.pt for kp in kps]
-      undisorted_points = cv.undistortPoints(points, self.intrinsic_matrix, self.distortion_coefficients)
-      for i, kp in enumerate(kps):
-        kp.pt = undisorted_points[i]
+    if self.undistort_required and self.undistort_shortcut:
+      points = np.array([kp.pt for kp in kps], dtype=np.float32)
+      undistorted_points = cv.undistortPoints(
+        points, self.intrinsic_matrix, self.distortion_coefficients, None, None, self.intrinsic_matrix
+      )
+      for i, kp in enumerate(undistorted_points):
+        kps[i].pt = tuple(kp[0])
 
     self.cached_features[frame_number] = (kps, des)
     self.cache_expiration_queue.append(frame_number)

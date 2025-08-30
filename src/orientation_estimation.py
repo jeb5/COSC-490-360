@@ -95,7 +95,7 @@ def sliding_window(dm, window_size, feature_manager, quadratic=False):
     # save relation_image
     cv.imwrite("temp/relation_image.png", (relation_image * 255).astype(np.uint8))
 
-  estimated_orientations = solve_absolute_orientations(relative_rotations, dm.get_sequence_length(), 0)
+  estimated_orientations = solve_absolute_orientations(relative_rotations, dm.get_sequence_length())
 
   correction_matrix = dm.get_inertial(0) * estimated_orientations[0].inv()
   estimated_orientations = [correction_matrix * rot if rot is not None else rot for rot in estimated_orientations]
@@ -124,7 +124,7 @@ def overlapping_windows(dm, window_size, feature_manager):
       for i, j, rotation in observation_manager.get_observations_in_window(start_frame, start_frame + block_length):
         relative_rotations.append((i - start_frame, j - start_frame, rotation.inv()))
 
-      block_rots = solve_absolute_orientations(relative_rotations, block_length, 0)
+      block_rots = solve_absolute_orientations(relative_rotations, block_length)
       block_correction_matrix = None
       if block_num == 0:
         block_correction_matrix = dm.get_inertial(0) * block_rots[0].inv()
@@ -231,12 +231,15 @@ def is_valid_estimation(estimation_info):
   return True
 
 
-def solve_absolute_orientations(observed_relative_rotations, n, critical_group_index):
+def solve_absolute_orientations(observed_relative_rotations, n):
   G = nx.Graph()
   for i, j, observed_rotation in observed_relative_rotations:
     G.add_edge(i, j)
 
-  critical_group = list(nx.node_connected_component(G, critical_group_index))
+  Gcc = sorted(nx.connected_components(G), key=len, reverse=True)
+  G0 = G.subgraph(Gcc[0])
+  critical_group = list(G0.nodes)
+
   if len(critical_group) == 0:
     return [None] * n
   connected_matches = [

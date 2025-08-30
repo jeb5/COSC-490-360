@@ -4,7 +4,7 @@ import subprocess
 import csv
 import json
 
-import helpers
+# import helpers
 
 
 def get_keyframe_near(video_path, target_time, direction="before", window=5):
@@ -197,10 +197,10 @@ def main(args):
   if args.reduce_method == "average":
     print("Warning: 'Average' reduce method will lead to errors if the angle wraps around. Currently unusable")
 
-  input_csv_path = helpers.get_file_path_pack_dir(args.input, "inertial")
-  input_video_path = helpers.get_file_path_pack_dir(args.input, "video")
-  output_csv_path = helpers.get_file_path_pack_dir(args.output, "inertial")
-  output_video_path = helpers.get_file_path_pack_dir(args.output, "video")
+  input_csv_path = args.input_inertials
+  input_video_path = args.input_video
+  output_csv_path = os.path.join(args.output, "inertials.csv")
+  output_video_path = os.path.join(args.output, "raw.mp4")
 
   # Try to detect FPS
   cmd = [
@@ -246,24 +246,15 @@ def main(args):
 
   print(f"[DONE] Processed inertial data saved to {output_csv_path}")
 
-  caminfo_path = helpers.get_file_path_pack_dir(args.input, "camera_info")
-  if caminfo_path:
-    # copy caminfo file to output directory
-    output_caminfo_path = os.path.join(args.output, os.path.basename(caminfo_path))
-    with open(caminfo_path, "r") as f:
-      caminfo_data = f.read()
-    with open(output_caminfo_path, "w") as f:
-      f.write(caminfo_data)
-    print(f"[DONE] Camera info copied to {output_caminfo_path}")
-  else:
-    print("[WARNING] No camera info file found in input directory.")
+  print(f"[WARNING] Remember to manually copy camera_information.json to {args.output} if needed.")
 
 
 if __name__ == "__main__":
   parser = argparse.ArgumentParser(
     description="Trim video on nearest keyframes using ffmpeg -c copy, and extract relevant rotations from CSV. Currently specifically designed for GoPro inertial data CSV files."
   )
-  parser.add_argument("input", help="Path to input directory containing full-length video and inertial CSV file")
+  parser.add_argument("input_video", help="Path to full-length input video")
+  parser.add_argument("input_inertials", help="Path to full-length input inertial CSV file")
   parser.add_argument("output", help="Path to output directory for trimmed video and processed CSV file")
   parser.add_argument("start_frame", type=int, help="Desired start frame")
   parser.add_argument("end_frame", type=int, help="Desired end frame")

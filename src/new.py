@@ -32,7 +32,7 @@ def main(args):
 
 
 def estimate_orientations(dm, args):
-  feature_manager = FeatureManager(dm, "SIFT", 0.75, True, True, True)
+  feature_manager = FeatureManager(dm, "SIFT", 0.75, True, True, False)
   orientations = None
   if args.window_size == 1:
     print("Using rotation chaining for orientation estimation.")
