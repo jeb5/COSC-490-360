@@ -209,7 +209,9 @@ class ProcessContext:
     return False
 
 
-def generate_rotation_histories_plot(rotation_histories, extra_text=None, extra_rot=None, interactive=False, legend=True):
+def generate_rotation_histories_plot(
+  rotation_histories, extra_text=None, extra_rot=None, interactive=False, scatter=False, legend=True
+):
   text_fig = None
   if extra_text is not None:
     text_fig = plt.figure(figsize=(3, 1.4))
@@ -239,20 +241,17 @@ def generate_rotation_histories_plot(rotation_histories, extra_text=None, extra_
     name = rotation_history["name"]
     colour = rotation_history["colour"]
     rotations = rotation_history["data"]
-    # Get mask to filter out None values
-    mask = [rot is not None for rot in rotations]
-    mask = np.array(mask)
-    rotations = [rot if rot is not None else np.eye(3) for rot in rotations]
-    rotations = np.array(rotations)
-    # Python version (old)
-    # vectors = [rotation @ np.array([0, 1, 0]) for rotation in rotations]
-    # Numpy version (new)
-    vectors = rotations @ np.array([0, 1, 0])
-    # Apply mask, setting None values to NaN
-    vectors = np.where(mask[:, None], vectors, np.nan)
 
-    vector_history = np.array(vectors)
-    xs, ys, zs = vector_history[:, 0], vector_history[:, 1], vector_history[:, 2]
+    # vectors = rotation_history["vectors"]
+
+    ###
+    mask = np.array([rot is not None for rot in rotations])
+    rotations = np.array([rot if rot is not None else np.eye(3) for rot in rotations])
+
+    vectors = rotations @ np.array([0, 1, 0])
+    vectors = np.where(mask[:, None], vectors, np.nan)  # Apply mask, setting None values to NaN
+
+    xs, ys, zs = vectors[:, 0], vectors[:, 1], vectors[:, 2]
     ax_main.quiver(
       0,
       0,
@@ -265,7 +264,10 @@ def generate_rotation_histories_plot(rotation_histories, extra_text=None, extra_
       color=colour,
       arrow_length_ratio=0.2,
     )
-    ax_main.plot(xs, ys, zs, c=colour, marker=".", label=name)
+    if scatter:
+      ax_main.scatter(xs, ys, zs, c=colour, marker=".", label=name, s=5, alpha=1.0)
+    else:
+      ax_main.plot(xs, ys, zs, c=colour, marker=".", label=name)
 
   if extra_rot is not None:
     extra_vector = extra_rot @ np.array([0, 1, 0])
@@ -290,9 +292,12 @@ def generate_rotation_histories_plot(rotation_histories, extra_text=None, extra_
   ax_main.set_zlim(-1, 1)
   if legend:
     ax_main.legend()
-  ax_main.set_xticklabels([])
-  ax_main.set_yticklabels([])
-  ax_main.set_zticklabels([])
+  ax_main.set_xticks([-1, 1])
+  ax_main.set_yticks([-1, 1])
+  ax_main.set_zticks([-1, 1])
+
+  # Set aspect ratio to 1
+  ax_main.set_box_aspect([1, 1, 1])
 
   if interactive:
     main_fig.show()

@@ -51,13 +51,11 @@ def rotation_chaining(dm: DataManager, feature_manager: FeatureManager, produce_
   return estimated_orientations
 
 
-def sliding_window(dm, window_size, feature_manager, quadratic=False):
+def sliding_window(dm, window_size, observation_manager, quadratic=False):
   intrinsic_matrix, _, _ = dm.get_camera_info()
 
   def orientation_estimation_func(matches):
     return estimate_orientation_change(matches, intrinsic_matrix)
-
-  observation_manager = ObservationManager(feature_manager, is_valid_estimation, orientation_estimation_func, dm)
 
   back_sequence = helpers.get_sequence(window_size, window_size // 3, 3000) if quadratic else range(1, window_size + 1)
   frame_pairs = []
@@ -102,15 +100,8 @@ def sliding_window(dm, window_size, feature_manager, quadratic=False):
   return estimated_orientations
 
 
-def overlapping_windows(dm, window_size, feature_manager):
+def overlapping_windows(dm, window_size, observation_manager):
   assert window_size % 2 == 0, "Window size must be even for overlapping windows."
-
-  intrinsic_matrix, _, _ = dm.get_camera_info()
-
-  def orientation_estimation_func(matches):
-    return estimate_orientation_change(matches, intrinsic_matrix)
-
-  observation_manager = ObservationManager(feature_manager, is_valid_estimation, orientation_estimation_func, dm)
 
   half_window = window_size // 2
   estimated_orientations = []
@@ -204,6 +195,25 @@ def convert_coordinate_system(rotation):
       [-rotation[0, 1], -rotation[2, 1], rotation[1, 1]],
     ]
   )
+
+def generate_fibonacci_sphere_points(n):
+  points = []
+  phi = math.pi * (3.0 - math.sqrt(5.0))  # golden angle in radians
+
+  for i in range(n):
+    y = 1 - (i / float(n - 1)) * 2  # y goes from 1 to -1
+    radius = math.sqrt(1 - y * y)  # radius at y
+
+    theta = phi * i  # golden angle increment
+
+    x = math.cos(theta) * radius
+    z = math.sin(theta) * radius
+
+    rot = R.align_vectors([[0, 1, 0]], [[x, y, z]])[0]
+
+    points.append((np.array([x, y, z]), rot))
+
+  return points
 
 
 def draw_matches(frame, matches, features):
