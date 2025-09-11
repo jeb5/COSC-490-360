@@ -19,11 +19,11 @@ class ObservationManager:
 
   def get_observations(self, frame_pairs):
     for i, j in frame_pairs:
-      observation = self.__get_observation(i, j)
+      observation = self.get_observation(i, j)
       if observation is not None:
         yield observation
 
-  def __get_observation(self, i, j):
+  def get_observation(self, i, j):
     i, j = min(i, j), max(i, j)  # Enforce i <= j
     if (i, j) in self.cached_observations:
       return self.cached_observations[(i, j)]
@@ -63,8 +63,8 @@ class ObservationManager:
     min_index = min(i for i, _ in self.cached_observations.keys())
     left = self.generate_observation_image()
     (lh, lw) = left.shape[:2]
-    scale = 1000 // lh
-    left = cv.resize(left, (left.shape[1] * scale, left.shape[0] * scale), interpolation=cv.INTER_NEAREST)
+    scale = 1000 / lh
+    left = cv.resize(left, (int(left.shape[1] * scale), int(left.shape[0] * scale)), interpolation=cv.INTER_NEAREST)
     right = np.zeros_like(left)
     cv.namedWindow(window_name)
     current_pair = None

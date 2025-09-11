@@ -5,7 +5,9 @@ import torch
 import torchvision
 import matplotlib.font_manager as fm
 import matplotlib.pyplot as plt
+from scipy.spatial.transform import Rotation as R
 import progressbar as pb
+from scipy.spatial import ckdtree
 
 font_path = 'src/assets/roboto_mono.ttf'
 fm.fontManager.addfont(font_path)

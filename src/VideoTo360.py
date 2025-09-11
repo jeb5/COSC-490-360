@@ -20,19 +20,19 @@ from ObservationManager import ObservationManager
 
 
 def main(args):
-  figure = helpers.generate_rotation_histories_plot(
-    [
-      {
-        "name": "Sphere",
-        "colour": "#42a7f5",
-        "data": [rot.as_matrix() for (coords, rot) in orientation_estimation.generate_fibonacci_sphere_points(300)],
-        # "vectors": np.array([coords for (coords, rot) in orientation_estimation.generate_fibonacci_sphere_points(300)]),
-      },
-    ],
-    interactive=True,
-    scatter=True,
-  )
-  return
+  # figure = helpers.generate_rotation_histories_plot(
+  #   [
+  #     {
+  #       "name": "Sphere",
+  #       "colour": "#42a7f5",
+  #       "data": [rot.as_matrix() for (coords, rot) in helpers.generate_fibonacci_sphere_points(300)],
+  #       # "vectors": np.array([coords for (coords, rot) in orientation_estimation.generate_fibonacci_sphere_points(300)]),
+  #     },
+  #   ],
+  #   interactive=True,
+  #   scatter=True,
+  # )
+  # return
   dm = DataManager(args.directory, args.input_frame_interval, args.input_frame_scale, args.start_frame, args.end_frame)
 
   feature_manager = FeatureManager(dm, "SIFT", 0.75, True, True, False)

@@ -87,6 +87,13 @@ class FeatureManager:
 
     return kps, des
 
+  def add_feature_detection(self, frame_number, keypoints, descriptors):
+    self.cached_features[frame_number] = (keypoints, descriptors)
+    self.cache_expiration_queue.append(frame_number)
+    if len(self.cached_features) >= MAX_FEATURE_CACHE_SIZE:
+      oldest_frame = self.cache_expiration_queue.pop(0)
+      del self.cached_features[oldest_frame]
+
   def get_matches(self, features1, features2):
     kp1, des1 = features1
     kp2, des2 = features2

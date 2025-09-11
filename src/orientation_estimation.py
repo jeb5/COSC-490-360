@@ -3,6 +3,7 @@ import math
 import torch
 from DataManager import DataManager
 from FeatureManager import FeatureManager
+from KeypointsManager import KeypointsManager
 from ObservationManager import ObservationManager
 from helpers import ProcessContext
 import progressbar as pb
@@ -103,55 +104,94 @@ def sliding_window(dm, window_size, observation_manager, quadratic=False):
 def overlapping_windows(dm, window_size, observation_manager):
   assert window_size % 2 == 0, "Window size must be even for overlapping windows."
 
+  keypoints_manager = KeypointsManager(200)
+  feature_manager = observation_manager.feature_manager
+
   half_window = window_size // 2
   estimated_orientations = []
   num_blocks = math.ceil((2.0 * dm.get_sequence_length()) / window_size) - 1
   prefix_widgets = ["Overlapping windows matching | Block ", pb.Counter(format="%(value)d"), "/", pb.FormatLabel("%(max_value)d")]
   # TODO: Make process context allow for errors, and so current estimated_orientations can be returned
   with ProcessContext(prefix_widgets=prefix_widgets, max_value=num_blocks) as bar:
-    for block_num in bar(range(num_blocks)):
-      start_frame = block_num * half_window
-      block_length = min(window_size, dm.get_sequence_length() - start_frame)
-      relative_rotations = []
-      for i, j, rotation in observation_manager.get_observations_in_window(start_frame, start_frame + block_length):
-        relative_rotations.append((i - start_frame, j - start_frame, rotation.inv()))
+    try:
+      for block_num in bar(range(num_blocks)):
+        start_frame = block_num * half_window
+        block_length = min(window_size, dm.get_sequence_length() - start_frame)
+        relative_rotations = []
+        for i, j, rotation in observation_manager.get_observations_in_window(start_frame, start_frame + block_length):
+          relative_rotations.append((i - start_frame, j - start_frame, rotation.inv()))
 
-      block_rots = solve_absolute_orientations(relative_rotations, block_length)
-      block_correction_matrix = None
-      if block_num == 0:
-        block_correction_matrix = dm.get_inertial(0) * block_rots[0].inv()
-      else:
-        block_correction_matricies = []
-        for x in range(half_window):
-          previous_rot = estimated_orientations[-half_window + x]
-          current_block_rot = block_rots[x]
-          if previous_rot is not None and current_block_rot is not None:
-            block_correction_matricies.append(previous_rot * current_block_rot.inv())
-        if block_correction_matricies:
-          block_correction_matrix = R.concatenate(block_correction_matricies).mean()
+        block_rots = solve_absolute_orientations(relative_rotations, block_length)
+        block_correction_matrix = None
+        if block_num == 0:
+          block_correction_matrix = dm.get_inertial(0) * block_rots[0].inv()
         else:
-          print(f"No overlap between blocks {block_num - 1} and {block_num}, stopping estimation.")
-          break
-      block_rots = [None if rot is None else block_correction_matrix * rot for rot in block_rots]
-
-      if block_num == 0:
-        estimated_orientations.extend(block_rots)
-      else:
-        for x in range(half_window):
-          previous_rot = estimated_orientations[-half_window + x]
-          current_rot = block_rots[x]
-          current_weight = (x + 1) / (half_window + 1)
-          new_rot = None
-          if previous_rot is None:
-            new_rot = current_rot
-          elif current_rot is None:
-            new_rot = previous_rot
+          block_correction_matricies = []
+          relocalizing = False
+          for x in range(half_window):
+            previous_rot = estimated_orientations[-half_window + x]
+            current_block_rot = block_rots[x]
+            if previous_rot is not None and current_block_rot is not None:
+              block_correction_matricies.append(previous_rot * current_block_rot.inv())
+          if not block_correction_matricies:
+            # For each frame, look for matching keypoints, and use those to determine correction (relocalize)
+            print(f"Trying to relocalize... (frame {start_frame})", flush=True)
+            relocalizing = True
+            for x in range(half_window):
+              inertial_rot = dm.get_inertial(start_frame + x)
+              nearest_keypoint = keypoints_manager.get_closest_keypoint(inertial_rot)
+              if nearest_keypoint is None:
+                continue
+              keypoint_features = nearest_keypoint["features"]
+              keypoint_index = nearest_keypoint["index"]
+              # keypoint_inertial_rotation = nearest_keypoint["rotation"]
+              keypoint_visual_rotation = estimated_orientations[keypoint_index]
+              feature_manager.add_feature_detection(start_frame + x, *keypoint_features)
+              observation = observation_manager.get_observation(keypoint_index, start_frame + x)
+              if observation is None:
+                continue
+              _, _, changeRot = observation
+              relocalized_rot = keypoint_visual_rotation * changeRot
+              current_block_rot = block_rots[x]
+              block_correction_matricies.append(relocalized_rot * current_block_rot.inv())
+          if not block_correction_matricies:
+            # No overlap found, no keypoints to relocalize with, give up :(
+            # print(f"No overlap between blocks {block_num - 1} and {block_num}, stopping estimation.")
+            block_rots = [None] * block_length
+            print("Empty block", flush=True)
           else:
-            new_rot = R.concatenate([current_rot, previous_rot]).mean(weights=[current_weight, (1 - current_weight)])
-          estimated_orientations[-half_window + x] = new_rot
-        estimated_orientations.extend(block_rots[half_window:])
+            block_correction_matrix = R.concatenate(block_correction_matricies).mean()
+            block_rots = [None if rot is None else block_correction_matrix * rot for rot in block_rots]
+            if relocalizing:
+              print(f"Relocalized! (frame {start_frame})", flush=True)
+
+        for x in range(half_window):
+          if block_rots[x] is not None:
+            inertial_rot = dm.get_inertial(start_frame + x)
+            keypoints_manager.add_potential_keypoint(
+              inertial_rot, feature_manager.detect_features(start_frame + x), start_frame + x
+            )
+
+        if block_num == 0:
+          estimated_orientations.extend(block_rots)
+        else:
+          for x in range(half_window):
+            previous_rot = estimated_orientations[-half_window + x]
+            current_rot = block_rots[x]
+            current_weight = (x + 1) / (half_window + 1)
+            new_rot = None
+            if previous_rot is None:
+              new_rot = current_rot
+            elif current_rot is None:
+              new_rot = previous_rot
+            else:
+              new_rot = R.concatenate([current_rot, previous_rot]).mean(weights=[current_weight, (1 - current_weight)])
+            estimated_orientations[-half_window + x] = new_rot
+          estimated_orientations.extend(block_rots[half_window:])
+    except Exception as e:
+      print(f"Error during overlapping windows: {e}")
+      pass
   # dm.save_image(observation_manager.generate_observation_image(), "observation_image.png")
-  observation_manager.show_interactive_observation_image()
   return estimated_orientations
 
 
@@ -196,25 +236,6 @@ def convert_coordinate_system(rotation):
     ]
   )
 
-def generate_fibonacci_sphere_points(n):
-  points = []
-  phi = math.pi * (3.0 - math.sqrt(5.0))  # golden angle in radians
-
-  for i in range(n):
-    y = 1 - (i / float(n - 1)) * 2  # y goes from 1 to -1
-    radius = math.sqrt(1 - y * y)  # radius at y
-
-    theta = phi * i  # golden angle increment
-
-    x = math.cos(theta) * radius
-    z = math.sin(theta) * radius
-
-    rot = R.align_vectors([[0, 1, 0]], [[x, y, z]])[0]
-
-    points.append((np.array([x, y, z]), rot))
-
-  return points
-
 
 def draw_matches(frame, matches, features):
   pts1, pts2 = matches
@@ -236,9 +257,9 @@ def draw_matches(frame, matches, features):
 def is_valid_estimation(estimation_info):
   if estimation_info is None:
     return False
-  if estimation_info["inliers"] < 20:
+  if estimation_info["inliers"] < 25:
     return False
-  if estimation_info["angle_change"] > 40:
+  if estimation_info["angle_change"] > 30:
     return False
   # if estimation_info["inliers_dice"] < 0.05:
   #   return False
