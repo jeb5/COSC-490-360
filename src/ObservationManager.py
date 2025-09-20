@@ -72,6 +72,7 @@ class ObservationManager:
     def render():
       if current_pair is not None:
         nonlocal right
+        print(f"Current pair: {current_pair}")
         right = self.draw_matches(*current_pair, True)
         right_rescale = (lh * scale) / right.shape[0]
         right = cv.resize(
@@ -88,6 +89,7 @@ class ObservationManager:
         print(f"Clicked on pixel ({px}, {py})")
         nonlocal current_pair
         current_pair = (px + min_index, py + min_index)
+        print(f"Current pair: {current_pair}")
         render()
 
     render()
@@ -99,8 +101,9 @@ class ObservationManager:
 
   def draw_matches(self, i, j, stacked=False):
     i, j = min(i, j), max(i, j)  # Enforce i <= j
-    framei = self.data_manager.get_frame(i)
-    framej = self.data_manager.get_frame(j)
+    print(f"Drawing matches for frames {i} and {j}")
+    framei = self.data_manager.get_frame(i, undistort=True)
+    framej = self.data_manager.get_frame(j, undistort=True)
     fi = self.feature_manager.detect_features(i)
     fj = self.feature_manager.detect_features(j)
     matches = self.feature_manager.get_matches(fi, fj)
@@ -117,19 +120,19 @@ class ObservationManager:
       stacked_image = np.vstack((framei, framej))
       frame_height = framej.shape[0]
 
-      for i, (pt1, pt2) in enumerate(zip(pts1, pts2)):
+      for k, (pt1, pt2) in enumerate(zip(pts1, pts2)):
         pt1 = tuple(map(int, pt1))
         pt2 = (int(pt2[0]), int(pt2[1] + frame_height))
-        color = (0, 255, 0) if homography_mask[i] else (0, 0, 255)
+        color = (0, 255, 0) if homography_mask[k] else (0, 0, 255)
         cv.line(stacked_image, pt1, pt2, color, 1)
       cv.putText(stacked_image, f"Frame {i}", (10, 30), cv.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
       cv.putText(stacked_image, f"Frame {j}", (10, 30 + frame_height), cv.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
       return stacked_image
     else:
-      for i, (pt1, pt2) in enumerate(zip(pts1, pts2)):
+      for k, (pt1, pt2) in enumerate(zip(pts1, pts2)):
         pt1 = tuple(map(int, pt1))
         pt2 = tuple(map(int, pt2))
-        color = (0, 255, 0) if homography_mask[i] else (0, 0, 255)
+        color = (0, 255, 0) if homography_mask[k] else (0, 0, 255)
         cv.line(framei, pt1, pt2, color, 1)
       cv.putText(framei, f"Frame {i}->{j}", (10, 30), cv.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
       return framei

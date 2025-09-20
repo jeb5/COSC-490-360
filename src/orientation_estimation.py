@@ -1,10 +1,8 @@
 import math
 
-import torch
 from DataManager import DataManager
 from FeatureManager import FeatureManager
 from KeypointsManager import KeypointsManager
-from ObservationManager import ObservationManager
 from helpers import ProcessContext
 import progressbar as pb
 import cv2 as cv
@@ -122,12 +120,11 @@ def overlapping_windows(dm, window_size, observation_manager):
           relative_rotations.append((i - start_frame, j - start_frame, rotation.inv()))
 
         block_rots = solve_absolute_orientations(relative_rotations, block_length)
-        block_correction_matrix = None
+        block_correction_matricies = []
+        relocalizing = False
         if block_num == 0:
-          block_correction_matrix = dm.get_inertial(0) * block_rots[0].inv()
+          block_correction_matricies.append(dm.get_inertial(0) * block_rots[0].inv())
         else:
-          block_correction_matricies = []
-          relocalizing = False
           for x in range(half_window):
             previous_rot = estimated_orientations[-half_window + x]
             current_block_rot = block_rots[x]
@@ -154,16 +151,16 @@ def overlapping_windows(dm, window_size, observation_manager):
               relocalized_rot = keypoint_visual_rotation * changeRot
               current_block_rot = block_rots[x]
               block_correction_matricies.append(relocalized_rot * current_block_rot.inv())
-          if not block_correction_matricies:
-            # No overlap found, no keypoints to relocalize with, give up :(
-            # print(f"No overlap between blocks {block_num - 1} and {block_num}, stopping estimation.")
-            block_rots = [None] * block_length
-            print("Empty block", flush=True)
-          else:
-            block_correction_matrix = R.concatenate(block_correction_matricies).mean()
-            block_rots = [None if rot is None else block_correction_matrix * rot for rot in block_rots]
-            if relocalizing:
-              print(f"Relocalized! (frame {start_frame})", flush=True)
+        if block_correction_matricies:
+          block_correction_matrix = R.concatenate(block_correction_matricies).mean()
+          block_rots = [None if rot is None else block_correction_matrix * rot for rot in block_rots]
+          if relocalizing:
+            print(f"Relocalized! (frame {start_frame})", flush=True)
+        else:
+          # No overlap found, no keypoints to relocalize with, give up :(
+          # print(f"No overlap between blocks {block_num - 1} and {block_num}, stopping estimation.")
+          block_rots = [None] * block_length
+          print("Empty block", flush=True)
 
         for x in range(half_window):
           if block_rots[x] is not None:
@@ -257,7 +254,7 @@ def draw_matches(frame, matches, features):
 def is_valid_estimation(estimation_info):
   if estimation_info is None:
     return False
-  if estimation_info["inliers"] < 25:
+  if estimation_info["inliers"] < 30:
     return False
   if estimation_info["angle_change"] > 30:
     return False
@@ -298,7 +295,18 @@ def solve_absolute_orientations(observed_relative_rotations, n):
 
   rotations = [orthonormalize(rot).T if rot is not None else None for rot in rotations]
   correction = rotations[critical_group[0]].T
-  rotations = [R.from_matrix(correction @ rot) if rot is not None else None for rot in rotations]
+  rotations = [correction @ rot if rot is not None else None for rot in rotations]
+  new_rotations = []
+  for rot in rotations:
+    try:
+      if rot is not None:
+        new_rotations.append(R.from_matrix(rot))
+      else:
+        new_rotations.append(None)
+    except Exception:
+      new_rotations.append(None)
+  rotations = new_rotations
+
   rotations = [rot if mask[i] else None for i, rot in enumerate(rotations)]
   return rotations
 

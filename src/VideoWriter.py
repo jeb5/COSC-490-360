@@ -5,13 +5,12 @@ import shutil
 import helpers
 import spatialmedia
 import spatialmedia.metadata_utils
-import line_profiler
 import threading
 import atexit
 
 
 class VideoWriter:
-  def __init__(self, filename, fps, size, mbps=15, spherical_metadata=False):
+  def __init__(self, filename, fps, size, mbps=10, spherical_metadata=False):
     self.filename = filename
     self.fps = fps
     self.size = size
@@ -29,19 +28,21 @@ class VideoWriter:
       "-y",
       "-f",
       "rawvideo",
-      "-pixel_format",
+      "-pix_fmt",
       "bgr24",
-      "-video_size",
+      "-s",
       f"{size[0]}x{size[1]}",
       "-framerate",
-      str(fps),
+      f"{fps:.4f}",
       "-i",
       "-",
-      # "-vf",
-      # "format=yuv420p",
       *(["-c:v", "h264_videotoolbox"] if size[0] < 4096 else []),  # Use hardware encoding for smaller resolutions
+      "-b:v",
+      f"{self.mbps}M",
       "-pix_fmt",
       "yuv420p",
+      "-movflags",
+      "+faststart",
       self.temp_path,
     ]
     print(f"Starting ffmpeg with command: {' '.join(ffmpeg_command)}")
@@ -85,7 +86,6 @@ class VideoWriter:
     return self.dirty
 
   # Frame is a tensor of shape (H, W, C), BGRA or BGR
-  @line_profiler.profile
   def write_frame(self, frame):
     if self.closed:
       raise ValueError("VideoWriter has already been closed.")
@@ -97,7 +97,6 @@ class VideoWriter:
     self.frame_number += 1
     self.dirty = True
 
-  @line_profiler.profile
   def write_frame_opencv(self, frame):
     if self.closed:
       raise ValueError("VideoWriter has already been closed.")
