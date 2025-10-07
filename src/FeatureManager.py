@@ -13,12 +13,12 @@ def get_SIFT_features(frame):
   threshold_multiplier = 1.0
   while True:
     sift = cv.SIFT_create(
-      nfeatures=5000,
+      nfeatures=6000,
       contrastThreshold=0.04 * threshold_multiplier,
       edgeThreshold=10 * threshold_multiplier,
     )
     kp, des = sift.detectAndCompute(frame, None)
-    if len(kp) > 200 or threshold_multiplier < 0.15:
+    if len(kp) > 400 or threshold_multiplier < 0.15:
       return kp, des
     threshold_multiplier *= 0.8
 
@@ -78,6 +78,16 @@ class FeatureManager:
       )
       for i, kp in enumerate(undistorted_points):
         kps[i].pt = tuple(kp[0])
+    filtered_kps, filtered_des = [], []
+    radius = min(frame.shape[0], frame.shape[1]) * 0.5 * 1.4
+    for i, kp in enumerate(kps):
+      # Check that keypoint is within radius of image center
+      x = kp.pt[0] - frame.shape[1] * 0.5
+      y = kp.pt[1] - frame.shape[0] * 0.5
+      if x * x + y * y <= radius * radius:
+        filtered_kps.append(kp)
+        filtered_des.append(des[i])
+    kps, des = np.array(filtered_kps), np.array(filtered_des)
 
     self.cached_features[frame_number] = (kps, des)
     self.cache_expiration_queue.append(frame_number)
@@ -107,6 +117,7 @@ class FeatureManager:
       search_params = dict(checks=50)
       matcher = cv.FlannBasedMatcher(index_params, search_params)
 
+    # TODO: Could optimize this by caching the matcher object itself for matching against the same descriptors (Would prevent multiple k-d tree builds)
     all_matches_12 = matcher.knnMatch(des1, des2, k=2)
 
     matches = []

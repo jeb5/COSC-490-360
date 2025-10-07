@@ -14,11 +14,18 @@ requires-python = ">=3.10"
 dependencies = [
     "torch",
 		"torchvision",
+		"torchaudio",
 		"pillow",
 		"numpy",
 		"opencv-python", 
 		"line-profiler",
 		"spatialmedia @ git+https://github.com/google/spatial-media.git",
+		"av",
+		"matplotlib",
+		"scipy",
+		"shapely",
+		"progressbar2",
+		"ngdsac_horizon @ git+https://github.com/jeb5/ngdsac_horizon.git"
 ]
 
 [tool.setuptools.packages.find]

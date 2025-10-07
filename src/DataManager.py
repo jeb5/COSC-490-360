@@ -15,6 +15,7 @@ class DataManager:
     self.input_frame_scale = input_frame_scale
     input_video_path = os.path.join(directory, "raw.mp4")
     self.input_video = cv.VideoCapture(input_video_path, cv.CAP_FFMPEG)
+    print("Using OpenCV video backend: CAP_FFMPEG")
     if not self.input_video.isOpened():
       raise Exception(f"Could not open video file: {input_video_path}")
     camera_info_path = os.path.join(directory, "camera_information.json")

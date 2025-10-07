@@ -3,6 +3,7 @@ import math
 from DataManager import DataManager
 from FeatureManager import FeatureManager
 from KeypointsManager import KeypointsManager
+import ObservationManager
 from helpers import ProcessContext
 import progressbar as pb
 import cv2 as cv
@@ -15,7 +16,7 @@ import scipy.sparse
 import helpers
 
 
-def rotation_chaining(dm: DataManager, feature_manager: FeatureManager, produce_debug=False):
+def rotation_chaining(dm: DataManager, observationManager: ObservationManager, produce_debug_video=False):
   estimated_orientations = []
 
   prefix_widgets = [
@@ -26,20 +27,17 @@ def rotation_chaining(dm: DataManager, feature_manager: FeatureManager, produce_
   ]
   with ProcessContext(prefix_widgets=prefix_widgets, max_value=dm.get_sequence_length()) as bar:
     estimated_orientations = [dm.get_inertial(0)]  # Start with the first inertial orientation
-    previous_features = feature_manager.detect_features(0)
-    intrinsic_matrix, _, _ = dm.get_camera_info()
 
     print()
     for frame_number in bar(range(1, dm.get_sequence_length())):
-      features = feature_manager.detect_features(frame_number)
-      matches = feature_manager.get_matches(previous_features, features)
-      if produce_debug:
-        dm.write_debug_frame(draw_matches(dm.get_frame(frame_number, undistort=True), matches, features))
-      previous_features = features
-      estimated_orientation_change, _ = estimate_orientation_change(matches, intrinsic_matrix)
-      if estimated_orientation_change is None:
+      observation = observationManager.get_observation(frame_number - 1, frame_number)
+
+      if produce_debug_video:
+        dm.write_debug_frame(observationManager.draw_matches(frame_number - 1, frame_number))
+      if observation is None:
         break
-      estimated_orientation = estimated_orientations[-1] * estimated_orientation_change
+      _, _, orientation_change = observation
+      estimated_orientation = estimated_orientations[-1] * orientation_change
       estimated_orientations.append(estimated_orientation)
       yaw, pitch, roll = estimated_orientation.as_euler("ZXY")
       td = 180 / np.pi
@@ -50,11 +48,8 @@ def rotation_chaining(dm: DataManager, feature_manager: FeatureManager, produce_
   return estimated_orientations
 
 
-def sliding_window(dm, window_size, observation_manager, quadratic=False):
+def sliding_window(dm: DataManager, window_size: int, observation_manager: ObservationManager, quadratic=False):
   intrinsic_matrix, _, _ = dm.get_camera_info()
-
-  def orientation_estimation_func(matches):
-    return estimate_orientation_change(matches, intrinsic_matrix)
 
   back_sequence = helpers.get_sequence(window_size, window_size // 3, 3000) if quadratic else range(1, window_size + 1)
   frame_pairs = []
@@ -67,39 +62,26 @@ def sliding_window(dm, window_size, observation_manager, quadratic=False):
   relative_rotations = []
 
   with ProcessContext(prefix_widgets=prefix_widgets, max_value=len(frame_pairs)) as bar:
-    relation_image = np.zeros((dm.get_sequence_length(), dm.get_sequence_length(), 3), dtype=np.float32)
+    for i, j, rotation in bar(observation_manager.get_observations(frame_pairs)):
+      relative_rotations.append((i, j, rotation.inv()))
 
-    for observation in bar(observation_manager.get_observations(frame_pairs)):
-      relative_rotations.append(observation)
-      i, j, rotation = observation
-      inertial_ground_truth = dm.get_inertial(i).inv() * dm.get_inertial(j)
-      difference = (rotation.inv() * inertial_ground_truth).magnitude() * (180 / np.pi)
-      relation_image[i, j, 0] = min(difference * 1.2, 1.0)
-      relation_image[i, j, 1] = 1
+  estimated_orientations = solve_absolute_orientations(
+    relative_rotations, dm.get_sequence_length(), return_largest_component=False
+  )
 
-      if difference > 0.3:
-        print(f"Significant difference found between frames {i} and {j}: {difference:.2f}˚")
-        print(f"Inertial i: {dm.get_inertial(i).as_euler('ZXY', degrees=True)}")
-        print(f"Inertial j: {dm.get_inertial(j).as_euler('ZXY', degrees=True)}")
-        print(f"Ground truth: {inertial_ground_truth.as_euler('ZXY', degrees=True)}")
-        print(f"Estimate: {rotation.as_euler('ZXY', degrees=True)}")
-        # fi = feature_manager.detect_features(i)
-        # fj = feature_manager.detect_features(j)
-        # matches = feature_manager.get_matches(fi, fj)
-        # debug_pic = draw_matches(dm.get_frame(i, undistort=True), matches, fi)
-        # cv.imshow("Debug Matches", debug_pic)
-        # cv.waitKey(0)
-    # save relation_image
-    cv.imwrite("temp/relation_image.png", (relation_image * 255).astype(np.uint8))
-
-  estimated_orientations = solve_absolute_orientations(relative_rotations, dm.get_sequence_length())
-
-  correction_matrix = dm.get_inertial(0) * estimated_orientations[0].inv()
-  estimated_orientations = [correction_matrix * rot if rot is not None else rot for rot in estimated_orientations]
-  return estimated_orientations
+  correction_matrix = None
+  for i in range(len(estimated_orientations)):
+    if estimated_orientations[i] is not None:
+      correction_matrix = dm.get_inertial(i) * estimated_orientations[i].inv()
+      break
+  if correction_matrix is not None:
+    estimated_orientations = [correction_matrix * rot if rot is not None else rot for rot in estimated_orientations]
+    return estimated_orientations
+  else:
+    return [None] * dm.get_sequence_length()
 
 
-def overlapping_windows(dm, window_size, observation_manager):
+def overlapping_windows(dm: DataManager, window_size: int, observation_manager: ObservationManager, relocalize=False):
   assert window_size % 2 == 0, "Window size must be even for overlapping windows."
 
   keypoints_manager = KeypointsManager(200)
@@ -130,11 +112,14 @@ def overlapping_windows(dm, window_size, observation_manager):
             current_block_rot = block_rots[x]
             if previous_rot is not None and current_block_rot is not None:
               block_correction_matricies.append(previous_rot * current_block_rot.inv())
-          if not block_correction_matricies:
+          if not block_correction_matricies and relocalize:
             # For each frame, look for matching keypoints, and use those to determine correction (relocalize)
             print(f"Trying to relocalize... (frame {start_frame})", flush=True)
             relocalizing = True
             for x in range(half_window):
+              current_block_rot = block_rots[x]
+              if current_block_rot is None:
+                continue
               inertial_rot = dm.get_inertial(start_frame + x)
               nearest_keypoint = keypoints_manager.get_closest_keypoint(inertial_rot)
               if nearest_keypoint is None:
@@ -143,13 +128,14 @@ def overlapping_windows(dm, window_size, observation_manager):
               keypoint_index = nearest_keypoint["index"]
               # keypoint_inertial_rotation = nearest_keypoint["rotation"]
               keypoint_visual_rotation = estimated_orientations[keypoint_index]
-              feature_manager.add_feature_detection(start_frame + x, *keypoint_features)
+              feature_manager.add_feature_detection(keypoint_index, *keypoint_features)
               observation = observation_manager.get_observation(keypoint_index, start_frame + x)
               if observation is None:
                 continue
               _, _, changeRot = observation
+              # Print changeRot euler
+              # print(f"ChangeRot: {changeRot.as_euler('ZXY', degrees=True)}")
               relocalized_rot = keypoint_visual_rotation * changeRot
-              current_block_rot = block_rots[x]
               block_correction_matricies.append(relocalized_rot * current_block_rot.inv())
         if block_correction_matricies:
           block_correction_matrix = R.concatenate(block_correction_matricies).mean()
@@ -187,8 +173,12 @@ def overlapping_windows(dm, window_size, observation_manager):
           estimated_orientations.extend(block_rots[half_window:])
     except Exception as e:
       print(f"Error during overlapping windows: {e}")
+      # print stack trace
+      import traceback
+
+      traceback.print_exc()
       pass
-  # dm.save_image(observation_manager.generate_observation_image(), "observation_image.png")
+      # dm.save_image(observation_manager.generate_observation_image(), "observation_image.png")
   return estimated_orientations
 
 
@@ -196,17 +186,15 @@ def estimate_orientation_change(point_matches, intrinsic_matrix):
   points1, points2 = point_matches
   if len(points1) < 4:
     return None, None
-  H, mask = cv.findHomography(points1, points2, cv.RANSAC, 3)
+  # H, mask = cv.findHomography(points1, points2, cv.USAC_MAGSAC)
+  H, mask = cv.findHomography(points1, points2, cv.RANSAC, 10.0)
   if H is None:
     return None, None
 
   inlier_points1 = points1[mask.ravel() == 1]
-  inlier_points2 = points2[mask.ravel() == 1]
 
   if len(inlier_points1) < 4:
     return None, None
-
-  H, _ = cv.findHomography(inlier_points1, inlier_points2, 0)  # Least squares refinement
 
   extracted_rotation = np.linalg.inv(intrinsic_matrix) @ H @ intrinsic_matrix
   orthonormalized_rotation = project_to_so3(extracted_rotation)
@@ -263,14 +251,17 @@ def is_valid_estimation(estimation_info):
   return True
 
 
-def solve_absolute_orientations(observed_relative_rotations, n):
+def solve_absolute_orientations(observed_relative_rotations, n, return_largest_component=True):
   G = nx.Graph()
   for i, j, observed_rotation in observed_relative_rotations:
     G.add_edge(i, j)
 
-  Gcc = sorted(nx.connected_components(G), key=len, reverse=True)
-  G0 = G.subgraph(Gcc[0])
-  critical_group = list(G0.nodes)
+  critical_group = None
+  if return_largest_component:
+    Gcc = sorted(nx.connected_components(G), key=len, reverse=True)
+    critical_group = list(Gcc[0])
+  else:
+    critical_group = list(nx.node_connected_component(G, 0))
 
   if len(critical_group) == 0:
     return [None] * n

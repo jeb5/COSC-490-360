@@ -1,11 +1,13 @@
 import numpy as np
 import cv2 as cv
 
+from FeatureManager import FeatureManager
+
 MAX_OBSERVATION_CACHE_SIZE = 100000
 
 
 class ObservationManager:
-  def __init__(self, feature_manager, validator_func, orientation_estimation_func, data_manager):
+  def __init__(self, feature_manager: FeatureManager, validator_func, orientation_estimation_func, data_manager):
     self.feature_manager = feature_manager
     self.validator_func = validator_func
     self.orientation_estimation_func = orientation_estimation_func
@@ -23,7 +25,7 @@ class ObservationManager:
       if observation is not None:
         yield observation
 
-  def get_observation(self, i, j):
+  def get_observation(self, i, j, validate=True):
     i, j = min(i, j), max(i, j)  # Enforce i <= j
     if (i, j) in self.cached_observations:
       return self.cached_observations[(i, j)]
@@ -40,7 +42,9 @@ class ObservationManager:
     if len(self.cached_observations) >= MAX_OBSERVATION_CACHE_SIZE:
       oldest_pair = self.cache_expiration_queue.pop(0)
       del self.cached_observations[oldest_pair]
-    return result
+    if validate and result is None:
+      return None
+    return (i, j, relative_orientation)
 
   def generate_observation_image(self):
     # Get maximum and minimum indicies in cached observations

@@ -20,22 +20,11 @@ from ObservationManager import ObservationManager
 
 
 def main(args):
-  # figure = helpers.generate_rotation_histories_plot(
-  #   [
-  #     {
-  #       "name": "Sphere",
-  #       "colour": "#42a7f5",
-  #       "data": [rot.as_matrix() for (coords, rot) in helpers.generate_fibonacci_sphere_points(300)],
-  #       # "vectors": np.array([coords for (coords, rot) in orientation_estimation.generate_fibonacci_sphere_points(300)]),
-  #     },
-  #   ],
-  #   interactive=True,
-  #   scatter=True,
-  # )
-  # return
   dm = DataManager(args.directory, args.input_frame_interval, args.input_frame_scale, args.start_frame, args.end_frame)
 
-  feature_manager = FeatureManager(dm, "SIFT", 0.75, True, True, False)
+  print(f"Output directory: {dm.output_dir}")
+
+  feature_manager = FeatureManager(dm, "SIFT", 0.7, True, True, False)
   intrinsic_matrix, _, _ = dm.get_camera_info()
 
   def orientation_estimation_func(matches):
@@ -48,9 +37,7 @@ def main(args):
     dm,
   )
 
-  estimated_orientations = (
-    dm.get_inertials() if args.use_inertials else estimate_orientations(dm, args, feature_manager, observation_manager)
-  )
+  estimated_orientations = dm.get_inertials() if args.use_inertials else estimate_orientations(dm, args, observation_manager)
 
   if not args.use_inertials:
     dm.write_orientations(estimated_orientations)
@@ -62,11 +49,11 @@ def main(args):
     generate_equirectangular_video(dm, estimated_orientations, args.output_scale)
 
 
-def estimate_orientations(dm, args, feature_manager, observation_manager):
+def estimate_orientations(dm, args, observation_manager):
   orientations = None
   if args.window_size == 1:
     print("Using rotation chaining for orientation estimation.")
-    orientations = rotation_chaining(dm, feature_manager, args.produce_debug)
+    orientations = rotation_chaining(dm, observation_manager, args.produce_debug)
   elif args.window_strategy == "simple":
     print("Using simple sliding window for orientation estimation.")
     orientations = sliding_window(dm, args.window_size, observation_manager)
@@ -75,7 +62,7 @@ def estimate_orientations(dm, args, feature_manager, observation_manager):
     orientations = sliding_window(dm, args.window_size, observation_manager, quadratic=True)
   elif args.window_strategy == "overlapping":
     print("Using sliding window with overlapping frames for orientation estimation.")
-    orientations = overlapping_windows(dm, args.window_size, observation_manager)
+    orientations = overlapping_windows(dm, args.window_size, observation_manager, args.relocalize)
   if args.produce_debug:
     dm.save_debug_video()
   # orientations = thing_that_works(dm, feature_manager)
@@ -103,12 +90,14 @@ def output_estimation_information(dm, estimated_orientations, observation_manage
     interactive=interactive,
   )
   dm.save_image(comparison_figure, "comparison_figure.png")
-  dm.save_image(observation_manager.generate_observation_image(), "observations.png")
-  if interactive:
-    observation_manager.show_interactive_observation_image()
+  observation_image = observation_manager.generate_observation_image()
+  if observation_image is not None:
+    dm.save_image(observation_image, "observations.png")
+    if interactive:
+      observation_manager.show_interactive_observation_image()
 
 
-def generate_equirectangular_video(dm, orientations, output_scale):
+def generate_equirectangular_video(dm: DataManager, orientations, output_scale):
   device = helpers.get_device()
   intrinsic_matrix, _, (w, h) = dm.get_camera_info()
   focal_length = float(intrinsic_matrix[0][0] + intrinsic_matrix[1][1]) / 2
@@ -131,6 +120,13 @@ def generate_equirectangular_video(dm, orientations, output_scale):
 
       frame = cv.cvtColor(frame, cv.COLOR_BGR2BGRA)
       frame = torch.from_numpy(frame).to(device).float()
+      # frame = helpers.apply_combined_vignette_alpha(
+      #   frame, circ_start_pct=0.81, circ_end_pct=0.9, rect_start_pct=0, rect_end_pct=0.1
+      # )
+      frame = helpers.apply_combined_vignette_alpha(frame, circ_start_pct=1, rect_start_pct=0.3, rect_end_pct=0.3)
+
+      frame_np = frame.cpu().numpy().astype(np.uint8)
+      dm.save_image(frame_np, f"input_{frame_number:05d}.png")
 
       if rotation is not None:
         map360 = remap_360.remapping360_torch(w, h, rotation, focal_length, output_vectors)
@@ -141,6 +137,9 @@ def generate_equirectangular_video(dm, orientations, output_scale):
       if frame_number > N:
         last_N_frames.pop(0)
       output_frame = torch.mean(torch.stack(last_N_frames), dim=0)
+      # Convert to numpy image format
+      image_np = output_frame.cpu().numpy().astype(np.uint8)
+      dm.save_image(image_np, f"equirectangular_{frame_number:05d}.png")
       dm.write_360_frame(output_frame)
   dm.save_360_video()
   print("Done.")
@@ -152,6 +151,7 @@ if __name__ == "__main__":
   parser.add_argument("--produce_debug", action="store_true")
   parser.add_argument("--interactive", action="store_true")
   parser.add_argument("--produce_360", action="store_true")
+  parser.add_argument("--relocalize", action="store_true")
   # parser.add_argument("--use_features_cache", action="store_true")
   # parser.add_argument("--use_matches_cache", action="store_true")
   parser.add_argument("--use_inertials", action="store_true")

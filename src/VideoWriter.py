@@ -7,6 +7,7 @@ import spatialmedia
 import spatialmedia.metadata_utils
 import threading
 import atexit
+import platform
 
 
 class VideoWriter:
@@ -36,7 +37,9 @@ class VideoWriter:
       f"{fps:.4f}",
       "-i",
       "-",
-      *(["-c:v", "h264_videotoolbox"] if size[0] < 4096 else []),  # Use hardware encoding for smaller resolutions
+      *(
+        ["-c:v", "h264_videotoolbox"] if ((size[0] < 4096) and (platform.system() == "Darwin")) else []
+      ),  # Use hardware encoding for smaller resolutions
       "-b:v",
       f"{self.mbps}M",
       "-pix_fmt",

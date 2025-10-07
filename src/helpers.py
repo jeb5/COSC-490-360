@@ -7,7 +7,6 @@ import matplotlib.font_manager as fm
 import matplotlib.pyplot as plt
 from scipy.spatial.transform import Rotation as R
 import progressbar as pb
-from scipy.spatial import ckdtree
 
 font_path = 'src/assets/roboto_mono.ttf'
 fm.fontManager.addfont(font_path)
@@ -37,7 +36,6 @@ def add_transparent_image(background, foreground):
   return outImage.astype(np.uint8)
 
 # Images are BGRA [h, w, 4]
-
 
 def paste_cv(background, foreground, x, y):
   fgx1, fgy1 = max(-x, 0), max(-y, 0)
@@ -150,7 +148,7 @@ def apply_combined_vignette_alpha(image, circ_start_pct, circ_end_pct=None, rect
     circ_alpha = torch.clamp((circ_end - dist_from_center) / (circ_end - circ_start), 0.0, 1.0)
 
   # Rectangular distance to nearest edge
-  dist_to_edge = torch.minimum(torch.minimum(yy, H - 1 - yy), torch.minimum(xx, W - 1 - xx))
+  dist_to_edge = torch.minimum(torch.minimum(yy, H - 1 - yy) * (W / H), torch.minimum(xx, W - 1 - xx))
 
   # Rect alpha
   min_dim = min(H, W)

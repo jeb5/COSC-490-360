@@ -6,3 +6,5 @@
 *.blend
 *.blend1
 *.cache
+.env
+results*/

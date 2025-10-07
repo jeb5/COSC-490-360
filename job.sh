@@ -7,20 +7,38 @@
 #SBATCH --time=4:00:00
 #SBATCH --output=job_%j.log
 
-module load python/3.10.8
+set -euo pipefail
+
 module load cuda/11.8
+module load python/3.10.8
 
-cd ..
+PROJECT_ROOT=$(pwd)
+echo "Project root: $PROJECT_ROOT"
+ENV_DIR="$PROJECT_ROOT/../360_env"
 
-python -m venv 360_env
-source 360_env/bin/activate
+mkdir -p "$ENV_DIR"
+python -m venv "$ENV_DIR"
+source "$ENV_DIR/bin/activate"
 
-cd -
+bash "$PROJECT_ROOT/setup.sh"
 
-/bin/bash setup.sh
+# ------ Ensure ffmpeg is available ------
+FFMPEG_DIR="$ENV_DIR/ffmpeg"
+export PATH="$FFMPEG_DIR:$PATH"
 
+# Check if ffmpeg is in the PATH
+if ! command -v ffmpeg &> /dev/null; then
+    echo "ffmpeg not found, downloading static build..."
+		mkdir -p "$FFMPEG_DIR"
+		wget -qO- https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static.tar.xz | tar -xJ --strip-components=1 -C "$FFMPEG_DIR"
+		echo "ffmpeg downloaded"
+fi
+echo "ffmpeg version: $(ffmpeg -version | head -n 1)"
+# ---------------------------------------
 
-python -u scripts/run_experiments.py
+echo "Running COSC490 experiments..."
+python -u "$PROJECT_ROOT/scripts/run_experiments.py"
 
 deactivate
+
 echo "Job finished."

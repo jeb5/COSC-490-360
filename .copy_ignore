@@ -1,9 +1,15 @@
-/inputs*
-!/inputs1
 /temp/
+.git/
+.vscode/
 *.egg-info
 **/.DS_Store
 **/__pycache__/
 *.blend
 *.blend1
 *.cache
+inputs1/
+inputs2/
+inputs3/
+inputs4_experiments/*/outputs/
+.env
+results*/
