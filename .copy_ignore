@@ -9,7 +9,7 @@
 *.cache
 inputs1/
 inputs2/
-inputs3/
+inputs3/*/outputs/
 inputs4_experiments/*/outputs/
 .env
 results*/

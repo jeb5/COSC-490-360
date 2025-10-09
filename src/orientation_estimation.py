@@ -30,7 +30,7 @@ def rotation_chaining(dm: DataManager, observationManager: ObservationManager, p
 
     print()
     for frame_number in bar(range(1, dm.get_sequence_length())):
-      observation = observationManager.get_observation(frame_number - 1, frame_number)
+      observation = observationManager.get_observation(frame_number - 1, frame_number, validate=False)
 
       if produce_debug_video:
         dm.write_debug_frame(observationManager.draw_matches(frame_number - 1, frame_number))
@@ -252,6 +252,8 @@ def is_valid_estimation(estimation_info):
 
 
 def solve_absolute_orientations(observed_relative_rotations, n, return_largest_component=True):
+  if len(observed_relative_rotations) < 2:
+    return [None] * n
   G = nx.Graph()
   for i, j, observed_rotation in observed_relative_rotations:
     G.add_edge(i, j)

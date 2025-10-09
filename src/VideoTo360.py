@@ -23,6 +23,9 @@ def main(args):
   dm = DataManager(args.directory, args.input_frame_interval, args.input_frame_scale, args.start_frame, args.end_frame)
 
   print(f"Output directory: {dm.output_dir}")
+  for i, rot in enumerate(dm.get_inertials()):
+    if rot is None:
+      print(f"Inertial missing at frame {i}")
 
   feature_manager = FeatureManager(dm, "SIFT", 0.7, True, True, False)
   intrinsic_matrix, _, _ = dm.get_camera_info()
@@ -123,23 +126,28 @@ def generate_equirectangular_video(dm: DataManager, orientations, output_scale):
       # frame = helpers.apply_combined_vignette_alpha(
       #   frame, circ_start_pct=0.81, circ_end_pct=0.9, rect_start_pct=0, rect_end_pct=0.1
       # )
-      frame = helpers.apply_combined_vignette_alpha(frame, circ_start_pct=1, rect_start_pct=0.3, rect_end_pct=0.3)
+      # frame = helpers.apply_combined_vignette_alpha(frame, circ_start_pct=1, rect_start_pct=0.3, rect_end_pct=0.3)
 
-      frame_np = frame.cpu().numpy().astype(np.uint8)
-      dm.save_image(frame_np, f"input_{frame_number:05d}.png")
+      # frame_np = frame.cpu().numpy().astype(np.uint8)
+      # dm.save_image(frame_np, f"input_{frame_number:05d}.png")
 
       if rotation is not None:
         map360 = remap_360.remapping360_torch(w, h, rotation, focal_length, output_vectors)
         dst = remap.torch_remap(map360, frame)
+        # dst_np = dst.cpu().numpy().astype(np.uint8)
+        # dm.save_image(dst_np, f"remapped_{frame_number:05d}.png")
         background = helpers.add_transparent_image_torch(background, dst)
 
       last_N_frames.append(background)
       if frame_number > N:
         last_N_frames.pop(0)
       output_frame = torch.mean(torch.stack(last_N_frames), dim=0)
+      if frame_number == len(orientations) - 1:  # Save last frame
+        last_frame_np = output_frame.cpu().numpy().astype(np.uint8)
+        dm.save_image(last_frame_np, "equirectangular_last.png")
       # Convert to numpy image format
-      image_np = output_frame.cpu().numpy().astype(np.uint8)
-      dm.save_image(image_np, f"equirectangular_{frame_number:05d}.png")
+      # image_np = output_frame.cpu().numpy().astype(np.uint8)
+      # dm.save_image(image_np, f"equirectangular_{frame_number:05d}.png")
       dm.write_360_frame(output_frame)
   dm.save_360_video()
   print("Done.")

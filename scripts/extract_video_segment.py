@@ -197,6 +197,8 @@ def main(args):
   if args.reduce_method == "average":
     print("Warning: 'Average' reduce method will lead to errors if the angle wraps around. Currently unusable")
 
+  os.makedirs(args.output, exist_ok=True)
+
   input_csv_path = args.input_inertials
   input_video_path = args.input_video
   output_csv_path = os.path.join(args.output, "inertials.csv")

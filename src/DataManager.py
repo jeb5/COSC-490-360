@@ -28,7 +28,16 @@ class DataManager:
     inertial_path = os.path.join(directory, "inertials.csv")
     if not os.path.exists(inertial_path):
       raise FileNotFoundError(f"Inertial data file not found: {inertial_path}")
-    self.num_frames = int(self.input_video.get(cv.CAP_PROP_FRAME_COUNT))
+    # self.num_frames = int(self.input_video.get(cv.CAP_PROP_FRAME_COUNT))
+    self.num_frames = 0
+    print("Counting frames in video...")
+    while True:
+      ret, _ = self.input_video.read()
+      if not ret:
+        break
+      self.num_frames += 1
+    print(f"Total frames in video: {self.num_frames}")
+
     self.input_start_frame = input_start_frame
     self.input_end_frame = input_end_frame if input_end_frame is not None else self.num_frames
     self.num_frames = self.input_end_frame - self.input_start_frame
