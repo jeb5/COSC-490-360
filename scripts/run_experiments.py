@@ -9,29 +9,40 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 
 # Paths
 VIDEO_TO_360_PATH = "src/VideoTo360.py"
-INPUT_DIRS = [str(p) for p in Path("inputs3").iterdir() if p.is_dir()]
-print(f"Running experiments on input directories: {INPUT_DIRS}")
-# INPUT_DIRS = []
+# INPUT_DIRS = [str(p) for p in Path("inputs3").iterdir() if p.is_dir()]
+INPUT_DIRS = [
+  # "inputs3/balloon_look_down",
+  # "inputs3/balloon_too_low",
+  # "inputs3/balloon_sample1",
+  # "inputs3/balloon_the_sea",
+  # "inputs3/balloon_long"
+  "inputs3/balloon_long_long"
+  #   "inputs3/balloon_manapouri_down",
+  #   "inputs3/balloon_low_descent",
+  #   "inputs3/balloon_sample2",
+  #   "inputs3/balloon_high_swing"
+]
 RESULTS_DIR = Path("results4")
 RESULTS_DIR.mkdir(exist_ok=True)
 
 # Parallel execution settings
-PARALLEL_EXPERIMENTS = 3  # Number of experiments to run in parallel
+PARALLEL_EXPERIMENTS = 4  # Number of experiments to run in parallel
 
 # Experiment configurations
 EXPERIMENTS = [
-  {"use_inertials": True},
-  {"window_size": 1, "window_strategy": "simple"},
-  {"window_size": 40, "window_strategy": "simple"},
-  {"window_size": 40, "window_strategy": "quadratic"},
-  {"window_size": 40, "window_strategy": "overlapping", "relocalize": True},
-  {"window_size": 40, "window_strategy": "overlapping", "relocalize": True},
-  {"window_size": 150, "window_strategy": "overlapping", "relocalize": True},
+  # {"use_inertials": True},
+  # {"window_size": 1, "window_strategy": "simple"},
+  # {"window_size": 40, "window_strategy": "simple"},
+  # {"window_size": 40, "window_strategy": "quadratic"},
+  {"window_size": 60, "window_strategy": "overlapping", "relocalize": True},
+  # {"window_size": 150, "window_strategy": "overlapping", "relocalize": True},
 ]
 default_args = {
   "produce_debug": True,
   "produce_360": True,
-  "output_scale": 0.5,
+  "output_scale": 0.25,
+  # "end_frame": 1000,
+  "input_frame_interval": 60,
 }
 # Add default arguments to all experiments
 EXPERIMENTS = [{**default_args, **exp} for exp in EXPERIMENTS]

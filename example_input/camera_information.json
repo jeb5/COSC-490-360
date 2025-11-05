@@ -1,0 +1,8 @@
+{
+	"intrinsic_matrix": [
+		[1050, 0.0, 960.0],
+		[0.0, 1050, 540.0],
+		[0.0, 0.0, 1.0]
+	],
+	"distortion_coefficients": []
+}

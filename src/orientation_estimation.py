@@ -105,7 +105,10 @@ def overlapping_windows(dm: DataManager, window_size: int, observation_manager: 
         block_correction_matricies = []
         relocalizing = False
         if block_num == 0:
-          block_correction_matricies.append(dm.get_inertial(0) * block_rots[0].inv())
+          for x in range(half_window):
+            if block_rots[x] is not None:
+              block_correction_matricies.append(dm.get_inertial(x) * block_rots[x].inv())
+              break
         else:
           for x in range(half_window):
             previous_rot = estimated_orientations[-half_window + x]
@@ -282,7 +285,12 @@ def solve_absolute_orientations(observed_relative_rotations, n, return_largest_c
     A[idx * 3 : idx * 3 + 3, j * 3 : j * 3 + 3] = np.eye(3)
 
   A_sp = scipy.sparse.csr_matrix(A)
-  _, _, Vt = svds(A_sp, k=3, which="SM")
+  Vt = None
+  try:
+    _, _, Vt = svds(A_sp, k=3, which="SM")
+  except Exception as e:
+    print(f"SVD did not converge: {e}")
+    return [None] * n
 
   rotations = np.stack(Vt, axis=1).reshape(n, 3, 3)
 
