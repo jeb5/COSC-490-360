@@ -1,7 +1,5 @@
 # Rotating 2D to Equirectangular 360 Video
 
-## Description
-
 Uses computer vision techniques to translate 2D video of a large scene, filmed with a rotating camera, into a stable 360 equirectangular video.
 
 ## Installation
